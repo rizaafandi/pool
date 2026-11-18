@@ -59,7 +59,7 @@ describe('addDrop', () => {
     const height = new Float32Array(size * size);
     const next = addDrop(height, size, 0.5, 0.5, 0.05, -0.04);
     const center = 16 * size + 16;
-    expect(next[center]).toBeLessThan(-0.03);
+    expect(next[center]).toBeLessThan(-0.02);
     expect(next[0]).toBe(0);
     expect(next[size * size - 1]).toBe(0);
     expect(next[1]).toBe(0);

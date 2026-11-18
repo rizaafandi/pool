@@ -23,8 +23,8 @@ export function stepHeightfield(height, velocity, size, waveSpeed, damping) {
 
 export function addDrop(height, size, u, v, radius, strength) {
   const next = new Float32Array(height);
-  const cx = u * size;
-  const cy = v * size;
+  const cx = u * (size - 1);
+  const cy = v * (size - 1);
   const reach = Math.ceil(radius * (size - 1));
   const y0 = Math.max(1, Math.floor(cy - reach));
   const y1 = Math.min(size - 2, Math.ceil(cy + reach));
