@@ -22,6 +22,7 @@ let pointerDown = false;
 let pendingDrop = null;
 let previousHit = null;
 let lastSampleAt = performance.now();
+let lastSpeed = 0;
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, VIEW.maxDpr);
@@ -65,15 +66,20 @@ canvas.addEventListener('pointermove', (event) => {
 window.addEventListener('pointerup', () => {
   pointerDown = false;
 });
+window.addEventListener('pointercancel', () => {
+  pointerDown = false;
+});
 
 button.addEventListener('click', async () => {
   if (!window.isSecureContext) {
     button.textContent = 'Open this page on localhost.';
     return;
   }
+  button.disabled = true;
   button.textContent = 'Starting the camera…';
+  let stream = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user', width: 640, height: 480 },
       audio: false,
     });
@@ -82,6 +88,11 @@ button.addEventListener('click', async () => {
     hands = await createHands(video);
     gate.classList.add('hidden');
   } catch (error) {
+    if (stream) {
+      for (const track of stream.getTracks()) track.stop();
+      video.srcObject = null;
+    }
+    button.disabled = false;
     button.textContent = 'Camera blocked. Click and drag the water instead.';
   }
 });
@@ -99,14 +110,20 @@ function frame(now) {
   if (hands) {
     const aspect = canvas.width / canvas.height;
     const sample = hands.sample(CAMERA, aspect, POOL);
-    const sampleDt = Math.max(0.001, (now - lastSampleAt) / 1000);
-    if (sample && sample.touching && sample.hit) {
-      const speed = planarSpeed(previousHit, sample.hit, sampleDt);
-      stamp(sample.hit, speed);
-      previousHit = sample.hit;
-      lastSampleAt = now;
-    } else if (!sample || !sample.touching) {
-      previousHit = null;
+    if (sample && sample.fresh) {
+      if (sample.touching && sample.hit) {
+        const sampleDt = Math.max(0.001, (now - lastSampleAt) / 1000);
+        const speed = planarSpeed(previousHit, sample.hit, sampleDt);
+        stamp(sample.hit, speed);
+        previousHit = sample.hit;
+        lastSampleAt = now;
+        lastSpeed = speed;
+      } else {
+        previousHit = null;
+        lastSpeed = 0;
+      }
+    } else if (sample && sample.touching && sample.hit) {
+      stamp(sample.hit, lastSpeed);
     }
   }
   accumulator += dt;

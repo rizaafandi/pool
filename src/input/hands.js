@@ -28,7 +28,9 @@ export async function createHands(video) {
   return {
     sample(camera, aspect, pool) {
       if (video.readyState < 2) return null;
-      if (video.currentTime === lastVideoTime) return cached;
+      if (video.currentTime === lastVideoTime) {
+        return cached && { ...cached, fresh: false };
+      }
       lastVideoTime = video.currentTime;
       let stamp = performance.now();
       if (stamp <= lastStamp) stamp = lastStamp + 1;
@@ -36,14 +38,14 @@ export async function createHands(video) {
       const result = detector.detectForVideo(video, stamp);
       const landmarks = result.landmarks && result.landmarks[0];
       if (!landmarks) {
-        cached = null;
-        return null;
+        cached = { touching: false, hit: null };
+        return { ...cached, fresh: true };
       }
       cached = {
         touching: isTouching(landmarks),
         hit: fingertipHit(landmarks[8], camera, aspect, pool),
       };
-      return cached;
+      return { ...cached, fresh: true };
     },
   };
 }
