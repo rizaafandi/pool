@@ -54,6 +54,7 @@ resize();
 window.addEventListener('resize', resize);
 
 let last = performance.now();
+const start = performance.now();
 let accumulator = 0;
 
 function frame(now) {
@@ -67,7 +68,7 @@ function frame(now) {
     accumulator -= SIM.stepSeconds;
     steps += 1;
   }
-  renderer.draw();
+  renderer.draw((now - start) / 1000);
   requestAnimationFrame(frame);
 }
 
