@@ -192,3 +192,77 @@ void main() {
   outColor = vec4(col, 1.0);
 }
 `;
+
+export const CAUSTIC_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 a_xz;
+uniform sampler2D u_sim;
+uniform float u_half;
+uniform float u_texel;
+uniform float u_worldDx;
+uniform float u_floorY;
+uniform float u_ior;
+uniform vec3 u_sunDir;
+${WAVE_UNIFORMS}
+${GERSTNER_FN}
+out vec3 v_oldHit;
+out vec3 v_newHit;
+out float v_path;
+out float v_valid;
+
+void main() {
+  vec2 horizontal;
+  float swell;
+  vec3 swellNormal = gerstner(a_xz, horizontal, swell);
+  vec2 xz = a_xz + horizontal;
+  vec2 uv = vec2(xz.x / (2.0 * u_half) + 0.5, xz.y / (2.0 * u_half) + 0.5);
+  float simH = texture(u_sim, uv).r;
+  float hL = texture(u_sim, uv + vec2(-u_texel, 0.0)).r;
+  float hR = texture(u_sim, uv + vec2(u_texel, 0.0)).r;
+  float hD = texture(u_sim, uv + vec2(0.0, -u_texel)).r;
+  float hU = texture(u_sim, uv + vec2(0.0, u_texel)).r;
+  vec3 simN = normalize(vec3(hL - hR, 2.0 * u_worldDx, hD - hU));
+  vec2 slope = vec2(-simN.x / simN.y, -simN.z / simN.y)
+    + vec2(-swellNormal.x / swellNormal.y, -swellNormal.z / swellNormal.y);
+  vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
+  vec3 P = vec3(xz.x, simH + swell, xz.y);
+
+  vec3 I = refract(-normalize(u_sunDir), normal, 1.0 / u_ior);
+  vec3 Iflat = refract(-normalize(u_sunDir), vec3(0.0, 1.0, 0.0), 1.0 / u_ior);
+  if (I.y >= -0.001 || Iflat.y >= -0.001) {
+    v_valid = 0.0;
+    v_oldHit = vec3(0.0);
+    v_newHit = vec3(0.0);
+    v_path = 0.0;
+    gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+    return;
+  }
+  float t = (u_floorY - P.y) / I.y;
+  vec3 hit = P + I * t;
+  float tFlat = (u_floorY - 0.0) / Iflat.y;
+  v_oldHit = vec3(a_xz.x, u_floorY, a_xz.y) + Iflat * tFlat;
+  v_newHit = hit;
+  v_path = length(hit - P);
+  v_valid = 1.0;
+  gl_Position = vec4(hit.x / u_half, hit.z / u_half, 0.0, 1.0);
+}
+`;
+
+export const CAUSTIC_FS = `#version 300 es
+precision highp float;
+in vec3 v_oldHit;
+in vec3 v_newHit;
+in float v_path;
+in float v_valid;
+out vec4 outColor;
+uniform vec3 u_absorption;
+
+void main() {
+  if (v_valid < 0.5) discard;
+  float oldArea = length(cross(dFdx(v_oldHit), dFdy(v_oldHit)));
+  float newArea = length(cross(dFdx(v_newHit), dFdy(v_newHit)));
+  float intensity = clamp(oldArea / max(newArea, 1e-5), 0.0, 3.0);
+  vec3 tint = vec3(0.75, 0.92, 1.0) * intensity * exp(-u_absorption * v_path);
+  outColor = vec4(tint, 1.0);
+}
+`;

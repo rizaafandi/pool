@@ -4,7 +4,7 @@ import {
 import { createGL, makeFloatTarget, program } from '../gl.js';
 import { lookAt, multiply, perspective } from '../math.js';
 import { createGrid } from './mesh.js';
-import { QUAD_VS, UPDATE_FS, WATER_FS, WATER_VS } from './shaders.js';
+import { CAUSTIC_FS, CAUSTIC_VS, QUAD_VS, UPDATE_FS, WATER_FS, WATER_VS } from './shaders.js';
 
 function uploadWaves(gl, prog) {
   const packed = new Float32Array(16);
@@ -40,14 +40,9 @@ export function createRenderer(canvas) {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, grid.indices, gl.STATIC_DRAW);
 
-  const fill = new Uint8Array([140, 140, 140, 255]);
-  const flatLight = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, flatLight);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, fill);
+  const linearFloat = Boolean(gl.getExtension('OES_texture_float_linear'));
+  const caustic = makeFloatTarget(gl, VIEW.causticSize, linearFloat ? gl.LINEAR : gl.NEAREST);
+  const causticProg = program(gl, CAUSTIC_VS, CAUSTIC_FS);
 
   const updateProg = program(gl, QUAD_VS, UPDATE_FS);
   const waterProg = program(gl, WATER_VS, WATER_FS);
@@ -97,6 +92,35 @@ export function createRenderer(canvas) {
       write = swap;
     },
     draw(timeSeconds) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, caustic.fb);
+      gl.viewport(0, 0, caustic.size, caustic.size);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(causticProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      const causticLoc = gl.getAttribLocation(causticProg, 'a_xz');
+      gl.enableVertexAttribArray(causticLoc);
+      gl.vertexAttribPointer(causticLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, read.tex);
+      gl.uniform1i(gl.getUniformLocation(causticProg, 'u_sim'), 0);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_time'), timeSeconds);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_half'), POOL.halfExtent);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_texel'), 1 / SIM.size);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_worldDx'), (2 * POOL.halfExtent) / SIM.size);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_floorY'), POOL.floorY);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_ior'), WATER.ior);
+      gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_sunDir'), SUN_DIR);
+      gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_absorption'), WATER.absorption);
+      uploadWaves(gl, causticProg);
+      gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
+      gl.disable(gl.BLEND);
+
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.enable(gl.DEPTH_TEST);
@@ -112,7 +136,7 @@ export function createRenderer(canvas) {
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
       gl.uniform1i(gl.getUniformLocation(waterProg, 'u_sim'), 0);
       gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, flatLight);
+      gl.bindTexture(gl.TEXTURE_2D, caustic.tex);
       gl.uniform1i(gl.getUniformLocation(waterProg, 'u_caustic'), 1);
       gl.uniformMatrix4fv(gl.getUniformLocation(waterProg, 'u_mvp'), false, mvp);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_time'), timeSeconds);
