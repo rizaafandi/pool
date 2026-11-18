@@ -2,288 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Water Caustics — WebGL Shader</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pool</title>
   <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    html, body { margin: 0; height: 100%; background: #042033; overflow: hidden; }
     canvas { display: block; width: 100vw; height: 100vh; }
+    #gate {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, sans-serif;
+    }
+    #gate button {
+      background: transparent; color: white;
+      border: 1px solid rgba(255,255,255,0.75);
+      padding: 0.8rem 1.2rem; font-size: 1rem;
+      border-radius: 999px; cursor: pointer;
+    }
+    #gate.hidden { display: none; }
+    video {
+      position: fixed; width: 1px; height: 1px;
+      opacity: 0; pointer-events: none;
+    }
   </style>
 </head>
 <body>
-
-<canvas id="canvas"></canvas>
-
-<!-- ─── Vertex Shader ─── -->
-<script id="vs" type="x-shader/x-vertex">
-  attribute vec2 a_position;
-  void main() {
-    gl_Position = vec4(a_position, 0.0, 1.0);
-  }
-</script>
-
-<!-- ─── Fragment Shader ─── -->
-<script id="fs" type="x-shader/x-fragment">
-  precision highp float;
-
-  uniform vec2  u_resolution;
-  uniform float u_time;
-
-  /*──────────────────────────────────────────────
-    Hash & Noise utilities
-  ──────────────────────────────────────────────*/
-
-  // Fast 2D → 1D hash
-  float hash(vec2 p) {
-    float h = dot(p, vec2(127.1, 311.7));
-    return fract(sin(h) * 43758.5453123);
-  }
-
-  // Smooth 2D value noise
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);  // Hermite smoothstep
-
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-  }
-
-  // Fractal Brownian Motion — 5 octaves
-  float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    vec2 shift = vec2(100.0);
-    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
-    for (int i = 0; i < 5; i++) {
-      v += a * noise(p);
-      p = rot * p * 2.0 + shift;
-      a *= 0.5;
-    }
-    return v;
-  }
-
-  /*──────────────────────────────────────────────
-    Voronoi-based caustic cell pattern
-    Returns distance to the nearest cell edge,
-    producing the bright "web" network of light.
-  ──────────────────────────────────────────────*/
-  float voronoi(vec2 p) {
-    vec2 ip = floor(p);
-    vec2 fp = fract(p);
-
-    float d1 = 1.0; // nearest
-    float d2 = 1.0; // second nearest
-
-    for (int x = -1; x <= 1; x++) {
-      for (int y = -1; y <= 1; y++) {
-        vec2 neighbor = vec2(float(x), float(y));
-        vec2 point = vec2(
-          hash(ip + neighbor),
-          hash(ip + neighbor + vec2(37.0, 91.0))
-        );
-        // Animate the cell centers over time
-        point = 0.5 + 0.5 * sin(u_time * 0.4 + 6.2831 * point);
-        vec2 diff = neighbor + point - fp;
-        float dist = dot(diff, diff);
-
-        if (dist < d1) {
-          d2 = d1;
-          d1 = dist;
-        } else if (dist < d2) {
-          d2 = dist;
-        }
-      }
-    }
-    // Edge distance: difference between 2nd and 1st nearest
-    return sqrt(d2) - sqrt(d1);
-  }
-
-  /*──────────────────────────────────────────────
-    Main caustics composition
-  ──────────────────────────────────────────────*/
-  void main() {
-    vec2 uv = gl_FragCoord.xy / u_resolution;
-    float aspect = u_resolution.x / u_resolution.y;
-    vec2 p = uv;
-    p.x *= aspect;
-
-    float t = u_time * 0.15;
-
-    // ── Domain warping ──
-    // Warp coordinates with two layers of fbm moving in different directions
-    vec2 warp1 = vec2(
-      fbm(p * 3.0 + vec2(t * 0.7, t * 0.3)),
-      fbm(p * 3.0 + vec2(-t * 0.5, t * 0.8) + vec2(5.2, 1.3))
-    );
-    vec2 warp2 = vec2(
-      fbm(p * 2.5 + warp1 * 1.5 + vec2(t * 0.3, -t * 0.4)),
-      fbm(p * 2.5 + warp1 * 1.5 + vec2(-t * 0.2, t * 0.6) + vec2(8.1, 3.7))
-    );
-
-    vec2 warped = p + warp2 * 0.35;
-
-    // ── Layer 1: primary caustic Voronoi network ──
-    float c1 = voronoi(warped * 4.0 + vec2(t * 0.5, t * 0.3));
-
-    // ── Layer 2: secondary caustic at different scale & speed ──
-    float c2 = voronoi(warped * 5.5 + vec2(-t * 0.4, t * 0.6) + vec2(3.3, 7.7));
-
-    // Combine: the interference produces the organic web
-    float caustic = c1 * c2;
-
-    // Sharpen the caustic lines — push contrast
-    caustic = pow(caustic, 0.6);
-    caustic = smoothstep(0.0, 0.35, caustic);
-
-    // Boost the brightest parts
-    float bright = pow(caustic, 2.0);
-
-    // ── Deep background variation (subtle dark patches) ──
-    float bg = fbm(warped * 2.0 + vec2(t * 0.1, -t * 0.15));
-    bg = smoothstep(0.3, 0.7, bg);
-
-    // ── Color palette ──
-    // Deep pool blue (dark areas)
-    vec3 deepBlue   = vec3(0.22, 0.58, 0.72);
-    vec3 midBlue    = vec3(0.40, 0.72, 0.82);
-    vec3 lightCyan  = vec3(0.70, 0.92, 0.96);
-    vec3 white      = vec3(1.0, 1.0, 1.0);
-
-    // Base water color with subtle variation
-    vec3 water = mix(deepBlue, midBlue, bg * 0.6 + 0.2);
-
-    // Blend in the caustic light lines
-    vec3 col = mix(water, lightCyan, caustic * 0.7);
-    col = mix(col, white, bright * 0.5);
-
-    // ── Specular glints ──
-    // Sparse bright dots simulating sun reflections on the surface
-    float glint1 = noise(p * 12.0 + vec2(t * 1.2, -t * 0.9));
-    float glint2 = noise(p * 18.0 + vec2(-t * 0.8, t * 1.5) + vec2(42.0, 13.0));
-    float glint = glint1 * glint2;
-    glint = pow(glint, 8.0) * 3.0;
-    glint = clamp(glint, 0.0, 1.0);
-    col += glint * vec3(1.0, 1.0, 0.95);
-
-    // ── Slight vignette for depth ──
-    float vig = 1.0 - 0.25 * length((uv - 0.5) * 1.4);
-    col *= vig;
-
-    // ── Very subtle chromatic aberration at edges ──
-    float dist = length(uv - 0.5);
-    float aberration = dist * dist * 0.008;
-    vec2 dir = normalize(uv - 0.5);
-
-    // We only offset the R and B channels slightly at the edges
-    vec2 uvR = uv + dir * aberration;
-    vec2 uvB = uv - dir * aberration;
-
-    // Recalculate a lightweight tint for R and B offset
-    float rShift = fbm(vec2(uvR.x * aspect, uvR.y) * 3.0 + warp2 * 0.35 * 3.0);
-    float bShift = fbm(vec2(uvB.x * aspect, uvB.y) * 3.0 + warp2 * 0.35 * 3.0);
-    col.r = mix(col.r, col.r * (0.95 + rShift * 0.1), dist);
-    col.b = mix(col.b, col.b * (0.95 + bShift * 0.1), dist);
-
-    // ── Gamma correction ──
-    col = pow(col, vec3(0.95));
-
-    gl_FragColor = vec4(col, 1.0);
-  }
-</script>
-
-<!-- ─── WebGL bootstrap ─── -->
-<script>
-  'use strict';
-
-  const canvas = document.getElementById('canvas');
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-
-  if (!gl) {
-    document.body.innerHTML = '<p style="color:#fff;font-family:sans-serif;padding:2rem">WebGL is not supported in this browser.</p>';
-    throw new Error('WebGL unavailable');
-  }
-
-  /* ── Helpers ── */
-  function compileShader(type, src) {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.error(gl.getShaderInfoLog(s));
-      gl.deleteShader(s);
-      return null;
-    }
-    return s;
-  }
-
-  function createProgram(vsSrc, fsSrc) {
-    const vs = compileShader(gl.VERTEX_SHADER, vsSrc);
-    const fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
-    const p = gl.createProgram();
-    gl.attachShader(p, vs);
-    gl.attachShader(p, fs);
-    gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-      console.error(gl.getProgramInfoLog(p));
-      gl.deleteProgram(p);
-      return null;
-    }
-    return p;
-  }
-
-  /* ── Build program ── */
-  const vsSrc = document.getElementById('vs').textContent;
-  const fsSrc = document.getElementById('fs').textContent;
-  const program = createProgram(vsSrc, fsSrc);
-  gl.useProgram(program);
-
-  /* ── Fullscreen quad ── */
-  const posBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-    -1, -1,  1, -1,  -1, 1,
-    -1,  1,  1, -1,   1, 1
-  ]), gl.STATIC_DRAW);
-
-  const aPos = gl.getAttribLocation(program, 'a_position');
-  gl.enableVertexAttribArray(aPos);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-  /* ── Uniforms ── */
-  const uRes  = gl.getUniformLocation(program, 'u_resolution');
-  const uTime = gl.getUniformLocation(program, 'u_time');
-
-  /* ── Resize handling ── */
-  function resize() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    canvas.width  = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width  = w + 'px';
-    canvas.style.height = h + 'px';
-    gl.viewport(0, 0, canvas.width, canvas.height);
-  }
-  window.addEventListener('resize', resize);
-  resize();
-
-  /* ── Render loop ── */
-  const startTime = performance.now();
-
-  function render() {
-    const elapsed = (performance.now() - startTime) / 1000.0;
-    gl.uniform2f(uRes, canvas.width, canvas.height);
-    gl.uniform1f(uTime, elapsed);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    requestAnimationFrame(render);
-  }
-  requestAnimationFrame(render);
-</script>
-
+  <canvas id="pool"></canvas>
+  <video id="cam" playsinline autoplay muted></video>
+  <div id="gate"><button id="start" type="button">Touch the water</button></div>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
