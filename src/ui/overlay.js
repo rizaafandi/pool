@@ -173,54 +173,361 @@ function drawRainStreaks(ctx, streaks, width, height, theme, lightningIntensity 
   ctx.restore();
 }
 
+function tracePetalPath(ctx, r, len, halfWidth, notch) {
+  ctx.beginPath();
+  ctx.moveTo(r * 0.06, -r * 0.03);
+  ctx.bezierCurveTo(
+    len * 0.28, -halfWidth * 0.82,
+    len * 0.78, -halfWidth * 1.12,
+    len, -halfWidth * 0.19,
+  );
+  ctx.quadraticCurveTo(len - notch, 0, len, halfWidth * 0.19);
+  ctx.bezierCurveTo(
+    len * 0.78, halfWidth * 1.12,
+    len * 0.28, halfWidth * 0.82,
+    r * 0.06, r * 0.03,
+  );
+  ctx.closePath();
+}
+
+function traceLeafPath(ctx, halfLen, halfWidth) {
+  ctx.beginPath();
+  ctx.moveTo(-halfLen, 0);
+  ctx.bezierCurveTo(
+    -halfLen * 0.55, -halfWidth * 1.05,
+    halfLen * 0.38, -halfWidth * 0.96,
+    halfLen, 0,
+  );
+  ctx.bezierCurveTo(
+    halfLen * 0.38, halfWidth * 0.96,
+    -halfLen * 0.55, halfWidth * 1.05,
+    -halfLen, 0,
+  );
+  ctx.closePath();
+}
+
+function drawStyledPetal(ctx, r, len, halfWidth, notch, lit, altitude, colors, hasLinearGrad) {
+  tracePetalPath(ctx, r, len, halfWidth, notch);
+  if (hasLinearGrad) {
+    const grad = ctx.createLinearGradient(r * 0.05, 0, len, 0);
+    grad.addColorStop(0, colors.petalBase);
+    grad.addColorStop(0.28, colors.petalMid);
+    grad.addColorStop(0.76, colors.petalColor);
+    grad.addColorStop(1, colors.petalEdge);
+    ctx.fillStyle = grad;
+  } else {
+    ctx.fillStyle = colors.petalColor;
+  }
+  ctx.fill();
+
+  if (hasLinearGrad) {
+    const shadeGrad = ctx.createLinearGradient(0, -halfWidth, 0, halfWidth);
+    if (lit >= 0) {
+      shadeGrad.addColorStop(0, `rgba(255, 255, 255, ${(0.06 + lit * 0.14).toFixed(3)})`);
+      shadeGrad.addColorStop(0.55, 'rgba(255, 255, 255, 0)');
+      shadeGrad.addColorStop(1, 'rgba(18, 28, 62, 0.09)');
+    } else {
+      shadeGrad.addColorStop(0, 'rgba(255, 255, 255, 0.04)');
+      shadeGrad.addColorStop(0.45, 'rgba(14, 24, 58, 0.03)');
+      shadeGrad.addColorStop(1, `rgba(12, 22, 54, ${(0.08 + (-lit) * 0.11).toFixed(3)})`);
+    }
+    ctx.fillStyle = shadeGrad;
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = colors.petalVein;
+  ctx.lineWidth = Math.max(0.45, r * 0.026);
+  ctx.beginPath();
+  ctx.moveTo(r * 0.12, 0);
+  ctx.quadraticCurveTo(len * 0.42, 0, len * 0.72, 0);
+  ctx.moveTo(r * 0.15, -r * 0.02);
+  ctx.quadraticCurveTo(len * 0.40, -halfWidth * 0.34, len * 0.66, -halfWidth * 0.46);
+  ctx.moveTo(r * 0.15, r * 0.02);
+  ctx.quadraticCurveTo(len * 0.40, halfWidth * 0.34, len * 0.66, halfWidth * 0.46);
+  ctx.stroke();
+
+  tracePetalPath(ctx, r, len, halfWidth, notch);
+  const rimAlpha = 0.22 + Math.max(0, lit) * 0.26 + (altitude <= 0.001 ? 0.08 : 0);
+  ctx.strokeStyle = `rgba(255, 255, 255, ${rimAlpha.toFixed(3)})`;
+  ctx.lineWidth = Math.max(0.55, r * 0.032);
+  ctx.stroke();
+}
+
 function drawBlossom(ctx, f, theme) {
-  const petalColor = (theme && theme.petalColor) || 'rgba(255, 245, 250, 0.92)';
-  const petalCore = (theme && theme.petalCore) || 'rgba(255, 210, 110, 0.95)';
-  const petals = f.petals || 5;
+  const colors = {
+    petalBase: (theme && theme.petalBase) || 'rgba(255, 224, 150, 0.94)',
+    petalMid: (theme && theme.petalMid) || 'rgba(255, 240, 245, 0.96)',
+    petalColor: (theme && theme.petalColor) || 'rgba(255, 248, 251, 0.95)',
+    petalEdge: (theme && theme.petalEdge) || 'rgba(255, 204, 220, 0.88)',
+    petalVein: (theme && theme.petalVein) || 'rgba(226, 154, 176, 0.25)',
+    petalCore: (theme && theme.petalCore) || 'rgba(248, 182, 58, 0.96)',
+    petalStamen: (theme && theme.petalStamen) || 'rgba(255, 226, 124, 0.95)',
+    leafBase: (theme && theme.leafBase) || 'rgba(66, 134, 72, 0.95)',
+    leafMid: (theme && theme.leafMid) || 'rgba(92, 166, 86, 0.94)',
+    leafEdge: (theme && theme.leafEdge) || 'rgba(134, 194, 102, 0.90)',
+    leafVein: (theme && theme.leafVein) || 'rgba(196, 232, 152, 0.36)',
+  };
+
+  const kind = f.kind || 'blossom';
+  const petals = f.petals || (kind === 'blossom' ? 5 : (kind === 'partial' ? 3 : 1));
   const r = f.radiusPx;
+  const seed = f.seed || 0.37;
+  const altitude = Math.max(0, f.altitude || 0);
+  const flutterTilt = f.flutterTilt || 0;
   const baseAspectY = f.aspectY || 0.85;
   const tiltX = f.tiltX || 0;
   const tiltZ = f.tiltZ || 0;
-  const scaleX = Math.max(0.75, Math.min(1.12, 1.0 - Math.abs(tiltX) * 0.35));
-  const scaleY = Math.max(0.52, Math.min(1.0, baseAspectY * (1.0 - tiltZ * 0.25)));
+  const scaleX = altitude > 0
+    ? Math.max(0.62, Math.min(1.08, 1.0 - Math.abs(flutterTilt) * 0.45))
+    : Math.max(0.75, Math.min(1.12, 1.0 - Math.abs(tiltX) * 0.35));
+  const scaleY = altitude > 0
+    ? Math.max(0.45, Math.min(1.0, baseAspectY * (1.0 - Math.abs(flutterTilt) * 0.55)))
+    : Math.max(0.52, Math.min(1.0, baseAspectY * (1.0 - tiltZ * 0.25)));
 
-  // Soft underwater shadow cast opposite to active theme's sun/moon direction
+  const hasBezier = typeof ctx.bezierCurveTo === 'function'
+    && typeof ctx.quadraticCurveTo === 'function'
+    && typeof ctx.moveTo === 'function'
+    && typeof ctx.lineTo === 'function'
+    && typeof ctx.closePath === 'function';
+  const hasLinearGrad = typeof ctx.createLinearGradient === 'function';
+  const hasRadialGrad = typeof ctx.createRadialGradient === 'function';
+
+  // Soft underwater shadow cast opposite to active theme's sun/moon direction.
+  // Airborne petals/leaves project their shadow onto the water surface below so object and shadow converge on landing.
   const sunDir = theme && Array.isArray(theme.sunDir) ? theme.sunDir : null;
   const sunY = sunDir ? Math.max(0.35, sunDir[1]) : 0.86;
-  const shadowOffX = sunDir ? (-sunDir[0] / sunY) * r * 0.65 : -r * 0.28;
-  const shadowOffY = sunDir ? (-sunDir[2] / sunY) * r * 0.65 : r * 0.42;
+  const sunAngle = sunDir ? Math.atan2(sunDir[2], sunDir[0]) : Math.atan2(0.46, 0.22);
+  const shadowR = f.shadowRadiusPx !== undefined ? f.shadowRadiusPx : r;
+  const shadowOffX = sunDir ? (-sunDir[0] / sunY) * shadowR * 0.65 : -shadowR * 0.28;
+  const shadowOffY = sunDir ? (-sunDir[2] / sunY) * shadowR * 0.65 : shadowR * 0.42;
+  const shadowBaseX = f.shadowX !== undefined ? f.shadowX : f.x;
+  const shadowBaseY = f.shadowY !== undefined ? f.shadowY : f.y;
+  const shadowAlpha = f.shadowAlpha !== undefined ? f.shadowAlpha : 0.22;
 
   ctx.save();
-  ctx.translate(f.x + shadowOffX, f.y + shadowOffY);
-  ctx.scale(scaleX, scaleY * 0.94);
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.95, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(2, 16, 54, 0.22)';
-  ctx.fill();
+  ctx.translate(shadowBaseX + shadowOffX, shadowBaseY + shadowOffY);
+  ctx.scale(scaleX, baseAspectY * 0.94);
+  if (hasBezier) {
+    ctx.rotate(f.angle);
+    for (let layer = 0; layer < 2; layer++) {
+      const layerScale = layer === 0 ? 1.12 : 0.92;
+      const layerAlpha = shadowAlpha * (layer === 0 ? 0.42 : 0.68);
+      ctx.fillStyle = `rgba(2, 16, 54, ${layerAlpha.toFixed(3)})`;
+      if (kind === 'leaf') {
+        traceLeafPath(ctx, shadowR * 1.05 * layerScale, shadowR * 0.46 * layerScale);
+        ctx.fill();
+      } else if (kind === 'petal') {
+        const sLen = shadowR * 1.38 * layerScale;
+        const sW = shadowR * 0.54 * layerScale;
+        ctx.save();
+        ctx.translate(-sLen * 0.48, 0);
+        tracePetalPath(ctx, shadowR * layerScale, sLen, sW, shadowR * 0.08);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        const slotStep = (Math.PI * 2) / 5;
+        for (let i = 0; i < petals; i++) {
+          ctx.save();
+          ctx.rotate(i * slotStep);
+          const sLen = shadowR * 1.02 * layerScale;
+          const sW = shadowR * 0.42 * layerScale;
+          tracePetalPath(ctx, shadowR * layerScale, sLen, sW, shadowR * 0.06);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  } else {
+    ctx.beginPath();
+    ctx.arc(0, 0, shadowR * 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(2, 16, 54, ${shadowAlpha.toFixed(3)})`;
+    ctx.fill();
+  }
   ctx.restore();
 
-  // Translucent floating petals tilted by pool perspective and local wave normal
+  // Translucent floating blossom, detached petal, or botanical leaf
   ctx.save();
   ctx.translate(f.x, f.y);
   ctx.scale(scaleX, scaleY);
   ctx.rotate(f.angle);
-  for (let i = 0; i < petals; i++) {
-    ctx.save();
-    ctx.rotate((i * Math.PI * 2) / petals);
-    ctx.beginPath();
-    ctx.ellipse(r * 0.52, 0, r * 0.56, r * 0.30, 0, 0, Math.PI * 2);
-    ctx.fillStyle = petalColor;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-    ctx.restore();
+
+  if (hasBezier) {
+    // Subtle water-surface contact occlusion right underneath resting floaters
+    if (altitude <= 0.001 && hasRadialGrad) {
+      const occR = kind === 'leaf' ? r * 1.05 : r * 1.12;
+      const contactGrad = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, occR);
+      contactGrad.addColorStop(0, 'rgba(3, 20, 56, 0.18)');
+      contactGrad.addColorStop(0.65, 'rgba(3, 20, 56, 0.08)');
+      contactGrad.addColorStop(1, 'rgba(3, 20, 56, 0)');
+      ctx.beginPath();
+      ctx.arc(0, 0, occR, 0, Math.PI * 2);
+      ctx.fillStyle = contactGrad;
+      ctx.fill();
+    }
+
+    if (kind === 'leaf') {
+      const halfLen = r * (1.08 + Math.sin(seed * 5.7) * 0.08);
+      const halfWidth = r * (0.46 + Math.cos(seed * 4.3) * 0.05);
+      const lit = Math.cos(f.angle - sunAngle);
+
+      // Tiny petiole stem at base of leaf
+      ctx.strokeStyle = colors.leafBase;
+      ctx.lineWidth = Math.max(0.8, r * 0.055);
+      ctx.beginPath();
+      ctx.moveTo(-halfLen * 1.24, 0);
+      ctx.quadraticCurveTo(-halfLen * 1.10, halfWidth * 0.08, -halfLen * 0.96, 0);
+      ctx.stroke();
+
+      // Leaf blade gradient from base to sunlit tip
+      traceLeafPath(ctx, halfLen, halfWidth);
+      if (hasLinearGrad) {
+        const grad = ctx.createLinearGradient(-halfLen, 0, halfLen, 0);
+        grad.addColorStop(0, colors.leafBase);
+        grad.addColorStop(0.45, colors.leafMid);
+        grad.addColorStop(1, colors.leafEdge);
+        ctx.fillStyle = grad;
+      } else {
+        ctx.fillStyle = colors.leafMid;
+      }
+      ctx.fill();
+
+      // Subtle two-half fold shading across the central midrib
+      if (hasLinearGrad) {
+        const foldGrad = ctx.createLinearGradient(0, -halfWidth, 0, halfWidth);
+        const topLight = 0.07 + Math.max(0, lit) * 0.14;
+        const botShade = 0.08 + Math.max(0, -lit) * 0.10;
+        foldGrad.addColorStop(0, `rgba(255, 255, 240, ${topLight.toFixed(3)})`);
+        foldGrad.addColorStop(0.49, 'rgba(255, 255, 255, 0)');
+        foldGrad.addColorStop(0.51, `rgba(8, 28, 22, ${(botShade * 0.5).toFixed(3)})`);
+        foldGrad.addColorStop(1, `rgba(6, 22, 18, ${botShade.toFixed(3)})`);
+        ctx.fillStyle = foldGrad;
+        ctx.fill();
+      }
+
+      // Central midrib and angled lateral leaf veins
+      ctx.strokeStyle = colors.leafVein;
+      ctx.lineWidth = Math.max(0.65, r * 0.036);
+      ctx.beginPath();
+      ctx.moveTo(-halfLen * 0.92, 0);
+      ctx.lineTo(halfLen * 0.88, 0);
+      ctx.stroke();
+
+      ctx.lineWidth = Math.max(0.45, r * 0.022);
+      ctx.beginPath();
+      const veinStops = [-0.46, -0.10, 0.24, 0.54];
+      for (const s of veinStops) {
+        const vx = halfLen * s;
+        const reach = (1 - Math.abs(s) * 0.85) * halfWidth * 0.78;
+        ctx.moveTo(vx, 0);
+        ctx.quadraticCurveTo(vx + halfLen * 0.14, -reach * 0.55, vx + halfLen * 0.24, -reach);
+        ctx.moveTo(vx, 0);
+        ctx.quadraticCurveTo(vx + halfLen * 0.14, reach * 0.55, vx + halfLen * 0.24, reach);
+      }
+      ctx.stroke();
+
+      // Delicate sunlit leaf rim
+      traceLeafPath(ctx, halfLen, halfWidth);
+      const rimAlpha = 0.16 + Math.max(0, lit) * 0.22 + (altitude <= 0.001 ? 0.06 : 0);
+      ctx.strokeStyle = `rgba(235, 255, 230, ${rimAlpha.toFixed(3)})`;
+      ctx.lineWidth = Math.max(0.5, r * 0.028);
+      ctx.stroke();
+    } else if (kind === 'petal') {
+      // Single detached blossom petal centered around its own body
+      const len = r * (1.44 + Math.cos(seed * 5.1) * 0.08);
+      const halfWidth = r * (0.56 + Math.sin(seed * 7.3) * 0.04);
+      const notch = r * (0.11 + (Math.sin(seed * 3.9) * 0.5 + 0.5) * 0.04);
+      const lit = Math.cos(f.angle - sunAngle);
+
+      ctx.save();
+      ctx.translate(-len * 0.48, 0);
+      drawStyledPetal(ctx, r, len, halfWidth, notch, lit, altitude, colors, hasLinearGrad);
+      ctx.restore();
+    } else {
+      // Full 5-petal blossom or 2-3 petal partial fragment
+      const slotStep = (Math.PI * 2) / 5;
+      for (let i = 0; i < petals; i++) {
+        const baseAngle = i * slotStep;
+        const jitter = Math.sin(seed * 7.3 + i * 2.41);
+        const petalAngle = baseAngle + jitter * 0.055;
+        const len = r * (1.06 + Math.cos(seed * 5.1 + i * 3.17) * 0.055);
+        const halfWidth = r * (0.43 + jitter * 0.03);
+        const notch = r * (0.08 + (jitter * 0.5 + 0.5) * 0.035);
+        const lit = Math.cos(f.angle + petalAngle - sunAngle);
+
+        ctx.save();
+        ctx.rotate(petalAngle);
+        drawStyledPetal(ctx, r, len, halfWidth, notch, lit, altitude, colors, hasLinearGrad);
+        ctx.restore();
+      }
+
+      // Soft glowing blossom throat
+      const coreScale = kind === 'partial' ? 0.72 : 1.0;
+      if (hasRadialGrad) {
+        const coreGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.34 * coreScale);
+        coreGrad.addColorStop(0, colors.petalCore);
+        coreGrad.addColorStop(0.55, colors.petalBase);
+        coreGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.34 * coreScale, 0, Math.PI * 2);
+        ctx.fillStyle = coreGrad;
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.22 * coreScale, 0, Math.PI * 2);
+        ctx.fillStyle = colors.petalCore;
+        ctx.fill();
+      }
+
+      // Fine radiating stamen filaments and pollen anthers
+      const stamenCount = kind === 'partial' ? 4 : 7;
+      const antherR = Math.max(0.75, r * 0.044);
+      ctx.strokeStyle = colors.petalStamen;
+      ctx.lineWidth = Math.max(0.5, r * 0.025);
+      for (let s = 0; s < stamenCount; s++) {
+        const sa = kind === 'partial'
+          ? (s / Math.max(1, stamenCount - 1)) * (petals - 1) * slotStep
+          : (s * Math.PI * 2) / stamenCount + seed * 1.3;
+        const sLen = r * (0.21 + (Math.sin(seed * 9.1 + s * 2.7) * 0.5 + 0.5) * 0.08);
+        const sx = Math.cos(sa) * sLen;
+        const sy = Math.sin(sa) * sLen;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(sa) * r * 0.05, Math.sin(sa) * r * 0.05);
+        ctx.lineTo(sx, sy);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, antherR, 0, Math.PI * 2);
+        ctx.fillStyle = colors.petalCore;
+        ctx.fill();
+      }
+
+      // Tiny central pistil dot
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(0.9, r * 0.075 * coreScale), 0, Math.PI * 2);
+      ctx.fillStyle = colors.petalCore;
+      ctx.fill();
+    }
+  } else {
+    // Minimal canvas fallback (used by lightweight unit test mocks without bezier methods)
+    for (let i = 0; i < petals; i++) {
+      ctx.save();
+      ctx.rotate((i * Math.PI * 2) / petals);
+      ctx.beginPath();
+      ctx.ellipse(r * 0.52, 0, r * 0.56, r * 0.30, 0, 0, Math.PI * 2);
+      ctx.fillStyle = kind === 'leaf' ? colors.leafMid : colors.petalColor;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (kind !== 'leaf' && kind !== 'petal') {
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.24, 0, Math.PI * 2);
+      ctx.fillStyle = colors.petalCore;
+      ctx.fill();
+    }
   }
-  // Warm blossom center
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.24, 0, Math.PI * 2);
-  ctx.fillStyle = petalCore;
-  ctx.fill();
   ctx.restore();
 }
 

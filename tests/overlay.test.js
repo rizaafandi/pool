@@ -205,4 +205,105 @@ describe('createOverlay', () => {
     expect(hudCanvas.calls.filter((c) => c[0] === 'lineTo').length).toBeGreaterThanOrEqual(2);
     expect(hudCanvas.calls.filter((c) => c[0] === 'arc').length).toBeGreaterThanOrEqual(4);
   });
+
+  it('draws an airborne falling petal with its separated water shadow', () => {
+    const hudCanvas = makeMockCanvas();
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null });
+    overlay.resize(1000, 800, 1);
+
+    overlay.draw([], 1000, {
+      floaters: [{
+        x: 500,
+        y: 260,
+        radiusPx: 22,
+        angle: 0.5,
+        petals: 5,
+        bob: 0.5,
+        altitude: 0.5,
+        flutterTilt: 0.25,
+        aspectY: 0.86,
+        shadowX: 485,
+        shadowY: 410,
+        shadowRadiusPx: 18,
+        shadowAlpha: 0.14,
+      }],
+    });
+
+    expect(hudCanvas.calls.filter((c) => c[0] === 'ellipse').length).toBeGreaterThanOrEqual(5);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'arc').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws realistic bezier petals, veins, gradients, and stamens on a full 2D canvas', () => {
+    const hudCanvas = makeMockCanvas();
+    const ctx = hudCanvas.getContext();
+    ctx.moveTo = (...args) => hudCanvas.calls.push(['moveTo', ...args]);
+    ctx.lineTo = (...args) => hudCanvas.calls.push(['lineTo', ...args]);
+    ctx.bezierCurveTo = (...args) => hudCanvas.calls.push(['bezierCurveTo', ...args]);
+    ctx.quadraticCurveTo = (...args) => hudCanvas.calls.push(['quadraticCurveTo', ...args]);
+    ctx.closePath = () => hudCanvas.calls.push(['closePath']);
+    ctx.createLinearGradient = () => {
+      hudCanvas.calls.push(['createLinearGradient']);
+      return { addColorStop: () => {} };
+    };
+    ctx.createRadialGradient = () => {
+      hudCanvas.calls.push(['createRadialGradient']);
+      return { addColorStop: () => {} };
+    };
+
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null });
+    overlay.resize(1000, 800, 1);
+
+    overlay.draw([], 1000, {
+      floaters: [{
+        x: 500,
+        y: 400,
+        radiusPx: 24,
+        angle: 0.4,
+        petals: 5,
+        seed: 1.2,
+        altitude: 0,
+        aspectY: 0.86,
+      }],
+    });
+
+    // 5 petals (plus shadow layers & rim strokes) use bezier curves, gradients, veins, and 7 stamens
+    expect(hudCanvas.calls.filter((c) => c[0] === 'bezierCurveTo').length).toBeGreaterThanOrEqual(20);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'quadraticCurveTo').length).toBeGreaterThanOrEqual(20);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'createLinearGradient').length).toBeGreaterThanOrEqual(10);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'createRadialGradient').length).toBeGreaterThanOrEqual(2);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'lineTo').length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('renders detached petals, leaves, and partial blossoms cleanly on a full 2D canvas', () => {
+    const hudCanvas = makeMockCanvas();
+    const ctx = hudCanvas.getContext();
+    ctx.moveTo = (...args) => hudCanvas.calls.push(['moveTo', ...args]);
+    ctx.lineTo = (...args) => hudCanvas.calls.push(['lineTo', ...args]);
+    ctx.bezierCurveTo = (...args) => hudCanvas.calls.push(['bezierCurveTo', ...args]);
+    ctx.quadraticCurveTo = (...args) => hudCanvas.calls.push(['quadraticCurveTo', ...args]);
+    ctx.closePath = () => hudCanvas.calls.push(['closePath']);
+    ctx.createLinearGradient = () => {
+      hudCanvas.calls.push(['createLinearGradient']);
+      return { addColorStop: () => {} };
+    };
+    ctx.createRadialGradient = () => {
+      hudCanvas.calls.push(['createRadialGradient']);
+      return { addColorStop: () => {} };
+    };
+
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null });
+    overlay.resize(1000, 800, 1);
+
+    overlay.draw([], 1000, {
+      floaters: [
+        { x: 300, y: 380, radiusPx: 22, angle: 0.3, kind: 'leaf', petals: 1, seed: 0.7, altitude: 0, aspectY: 0.85 },
+        { x: 520, y: 410, radiusPx: 20, angle: 1.1, kind: 'petal', petals: 1, seed: 1.5, altitude: 0, aspectY: 0.85 },
+        { x: 680, y: 350, radiusPx: 21, angle: 2.0, kind: 'partial', petals: 2, seed: 2.1, altitude: 0, aspectY: 0.85 },
+      ],
+    });
+
+    expect(hudCanvas.calls.filter((c) => c[0] === 'bezierCurveTo').length).toBeGreaterThanOrEqual(16);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'createLinearGradient').length).toBeGreaterThanOrEqual(6);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'lineTo').length).toBeGreaterThanOrEqual(5);
+  });
 });

@@ -45,7 +45,7 @@ An interactive real-time WebGL2 swimming pool & water caustics simulation featur
 | Create ripples & wakes | Click / tap and drag across the water | — |
 | Switch theme (**Sunlit**, **Sunset**, **Night**, **Biolum**) | Click theme pill in top-left toolbar | `1`, `2`, `3`, `4` |
 | Toggle **Rain** mode (visual raindrops + rain audio) | Click `Rain` pill | `R` |
-| Toggle **Floating Petals** | Click `Petals` pill | `P` |
+| Drop a **Floating Petal** | Click `Petal` pill | `P` |
 | Toggle **Sound** mute | Click `Sound` pill | `M` |
 | Enable **Webcam Hand Gestures** | Click `Use hand gesture` button (top-right) | — |
 | Toggle **Camera Preview** (once camera is active) | Click `Hide camera` / `Show camera` pill | `C` |

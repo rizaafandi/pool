@@ -267,11 +267,15 @@ if (rainButton) {
   });
 }
 
+function dropPetal(fromButton = false) {
+  audio.unlock();
+  floaters.dropRandom();
+  if (fromButton && petalsButton) rippleUnderElement(petalsButton);
+}
+
 if (petalsButton) {
   petalsButton.addEventListener('click', () => {
-    audio.unlock();
-    syncToggleButton(petalsButton, floaters.toggle());
-    rippleUnderElement(petalsButton);
+    dropPetal(true);
   });
 }
 
@@ -315,7 +319,7 @@ window.addEventListener('keydown', (event) => {
   } else if (key === 'r') {
     toggleRain(false);
   } else if (key === 'p') {
-    syncToggleButton(petalsButton, floaters.toggle());
+    dropPetal(false);
   } else if (key === 'm') {
     const muted = audio.toggleMute();
     syncToggleButton(soundButton, !muted, muted ? 'Sound: Off' : 'Sound');
@@ -409,12 +413,18 @@ function frame(now) {
   // Fixed-step heightfield simulation + floating blossoms physics
   accumulator += dt;
   let steps = 0;
+  const landedPetals = [];
   while (accumulator >= SIM.stepSeconds && steps < SIM.maxStepsPerFrame) {
     renderer.step(pendingDrops.size > 0 ? Array.from(pendingDrops.values()) : null);
     pendingDrops.clear();
-    floaters.step(SIM.stepSeconds, currentSwellTime, WAVES);
+    const landed = floaters.step(SIM.stepSeconds, currentSwellTime, WAVES);
+    if (landed.length > 0) landedPetals.push(...landed);
     accumulator -= SIM.stepSeconds;
     steps += 1;
+  }
+  for (const petal of landedPetals) {
+    queueDrop(`petal:${petal.id}`, petal);
+    audio.playDrop(0.28, now);
   }
 
   const uiPills = buttonReflections.collect(
@@ -431,18 +441,30 @@ function frame(now) {
   // Project visible floating blossoms and interactive water splashes onto HUD canvas
   const mvp = renderer.getMvp();
   const interactionSplashes = splashes.step(dt, CAMERA, aspect, mvp);
+  const activeTheme = THEMES[currentThemeId];
   const projectedFloaters = [];
   if (floaters.isEnabled()) {
     for (const item of floaters.list()) {
-      const p = projectFloater(item, CAMERA, aspect, cssWidth, cssHeight, currentSwellTime, WAVES, mvp);
+      const p = projectFloater(
+        item,
+        CAMERA,
+        aspect,
+        cssWidth,
+        cssHeight,
+        currentSwellTime,
+        WAVES,
+        mvp,
+        activeTheme ? activeTheme.sunDir : null,
+      );
       if (p) projectedFloaters.push(p);
     }
+    projectedFloaters.sort((a, b) => (a.altitude || 0) - (b.altitude || 0));
   }
   overlay.draw(indicators, now, {
     floaters: projectedFloaters,
     rain: rainFrame.visuals,
     splashes: interactionSplashes,
-    theme: THEMES[currentThemeId],
+    theme: activeTheme,
     occluders: uiPills.cssPills,
   });
 
