@@ -302,17 +302,22 @@ function drawBlossom(ctx, f, theme) {
   const shadowOffY = sunDir ? (-sunDir[2] / sunY) * shadowR * 0.65 : shadowR * 0.42;
   const shadowBaseX = f.shadowX !== undefined ? f.shadowX : f.x;
   const shadowBaseY = f.shadowY !== undefined ? f.shadowY : f.y;
-  const shadowAlpha = f.shadowAlpha !== undefined ? f.shadowAlpha : 0.22;
+  const shadowAlpha = (f.shadowAlpha !== undefined ? f.shadowAlpha : 0.20) * 0.86;
+  const hasFilter = typeof ctx.filter === 'string';
 
   ctx.save();
+  if (hasFilter) {
+    const blurPx = 2.4 + altitude * 5.2;
+    ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
+  }
   ctx.translate(shadowBaseX + shadowOffX, shadowBaseY + shadowOffY);
   ctx.scale(scaleX, baseAspectY * 0.94);
   if (hasBezier) {
     ctx.rotate(f.angle);
     for (let layer = 0; layer < 2; layer++) {
-      const layerScale = layer === 0 ? 1.12 : 0.92;
-      const layerAlpha = shadowAlpha * (layer === 0 ? 0.42 : 0.68);
-      ctx.fillStyle = `rgba(2, 16, 54, ${layerAlpha.toFixed(3)})`;
+      const layerScale = layer === 0 ? 1.14 : 0.94;
+      const layerAlpha = shadowAlpha * (layer === 0 ? 0.36 : 0.62);
+      ctx.fillStyle = `rgba(4, 34, 66, ${layerAlpha.toFixed(3)})`;
       if (kind === 'leaf') {
         traceLeafPath(ctx, shadowR * 1.05 * layerScale, shadowR * 0.46 * layerScale);
         ctx.fill();
@@ -340,13 +345,16 @@ function drawBlossom(ctx, f, theme) {
   } else {
     ctx.beginPath();
     ctx.arc(0, 0, shadowR * 0.95, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(2, 16, 54, ${shadowAlpha.toFixed(3)})`;
+    ctx.fillStyle = `rgba(4, 34, 66, ${shadowAlpha.toFixed(3)})`;
     ctx.fill();
   }
   ctx.restore();
 
   // Translucent floating blossom, detached petal, or botanical leaf
   ctx.save();
+  if (altitude <= 0.001) {
+    ctx.globalAlpha = 0.94;
+  }
   ctx.translate(f.x, f.y);
   ctx.scale(scaleX, scaleY);
   ctx.rotate(f.angle);

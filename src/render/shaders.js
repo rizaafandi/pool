@@ -182,22 +182,28 @@ float liquidField(vec2 p, float t) {
 }
 
 vec2 liquidSlope(vec2 xz, float t) {
-  vec2 p = xz * 4.3;
+  vec2 p = xz * 4.4;
   float e = 0.02;
   float hx = liquidField(p + vec2(e, 0.0), t) - liquidField(p - vec2(e, 0.0), t);
   float hz = liquidField(p + vec2(0.0, e), t) - liquidField(p - vec2(0.0, e), t);
-  return vec2(hx, hz) / (2.0 * e) * 0.58;
+  // Subtle high-frequency capillary ripple shimmer
+  vec2 c = xz * 11.5;
+  vec2 cap = vec2(
+    cos(c.x + c.y * 0.65 + t * 1.35) - 0.5 * sin(c.x * 1.3 - c.y * 0.9 - t * 1.1),
+    sin(c.y - c.x * 0.7 + t * 1.25) + 0.5 * cos(c.y * 1.2 + c.x * 0.85 - t * 1.05)
+  ) * 0.022;
+  return (vec2(hx, hz) / (2.0 * e)) * 0.21 + cap;
 }
 
-// Smooth, organic sunlit caustic web on the pool floor (zero polygon banding)
+// Crisp sunlit caustic network on the pool floor
 float causticWeb(vec2 xz, float t) {
-  vec2 p = xz * 3.4;
+  vec2 p = xz * 3.8;
   float f1 = liquidField(p, t * 1.05);
-  float f2 = liquidField(p * 1.12 + vec2(1.7, -1.3), t * 0.92);
-  float ridge1 = 1.0 - abs(f1);
-  float ridge2 = 1.0 - abs(f2);
-  float web = pow(clamp(ridge1, 0.0, 1.0), 5.0) + pow(clamp(ridge2, 0.0, 1.0), 5.0) * 0.65;
-  return clamp(web, 0.0, 1.6);
+  float f2 = liquidField(p * 1.22 + vec2(1.7, -1.3), t * 0.92);
+  float ridge1 = clamp(1.0 - abs(f1), 0.0, 1.0);
+  float ridge2 = clamp(1.0 - abs(f2), 0.0, 1.0);
+  float web = pow(ridge1, 7.2) * 1.15 + pow(ridge2, 7.5) * 0.72 + pow(ridge1 * ridge2, 3.2) * 0.55;
+  return clamp(web, 0.0, 2.2);
 }
 `;
 
@@ -302,70 +308,66 @@ vec3 floorColor(vec2 xz) {
   vec2 uv = clamp(xz / (2.0 * u_half) + 0.5, 0.0, 1.0);
 
   // Crisp refracted swimming-pool ceramic mosaic tiles
-  vec2 tileCoord = xz * 3.4;
+  vec2 tileCoord = xz * 3.6;
   vec2 tileId = floor(tileCoord);
   vec2 tileF = fract(tileCoord);
   vec2 fw = max(fwidth(tileCoord), vec2(0.004));
   vec2 edge = min(tileF, 1.0 - tileF);
-  float groutX = smoothstep(0.016, 0.016 + fw.x * 1.5, edge.x);
-  float groutY = smoothstep(0.016, 0.016 + fw.y * 1.5, edge.y);
+  float groutX = smoothstep(0.020, 0.020 + fw.x * 1.35, edge.x);
+  float groutY = smoothstep(0.020, 0.020 + fw.y * 1.35, edge.y);
   float tileMask = groutX * groutY;
 
   float tileVar = hash21(tileId);
   float tileVar2 = hash21(tileId + 19.3);
   vec3 tileCol = mix(u_tileDark, u_tileMid, tileVar);
-  tileCol = mix(tileCol, u_tileBright, smoothstep(0.55, 0.95, tileVar2) * 0.55);
-  float bevel = smoothstep(0.02, 0.12, min(edge.x, edge.y));
-  tileCol *= mix(0.88, 1.04, bevel);
+  tileCol = mix(tileCol, u_tileBright, smoothstep(0.52, 0.94, tileVar2) * 0.58);
+  float bevel = smoothstep(0.02, 0.14, min(edge.x, edge.y));
+  // Subtle ceramic glaze variation across each tile face
+  float glaze = 0.96 + 0.08 * sin(tileF.x * 3.14159) * sin(tileF.y * 3.14159);
+  tileCol *= mix(0.84, 1.04, bevel) * glaze;
 
   vec3 floorAlbedo = mix(u_groutCol, tileCol, tileMask);
 
-  // Combine smooth organic sunlight caustic web + chromatic interactive touch caustic
+  // Combine crisp chromatic sunlit caustic filaments + interactive touch caustic
   vec3 simCaustic = clamp(sampleCausticSoft(uv), 0.0, 1.0);
-  vec3 prismCaustic = pow(simCaustic, vec3(1.45)) * 0.42;
-  float sunWeb = causticWeb(xz, u_time);
-  float rainDim = 1.0 - u_rain * 0.24;
+  vec3 prismCaustic = pow(simCaustic, vec3(1.35)) * 0.52;
+  vec2 cDisp = vec2(0.006, -0.004);
+  vec3 sunWebRgb = vec3(
+    causticWeb(xz + cDisp, u_time),
+    causticWeb(xz, u_time),
+    causticWeb(xz - cDisp, u_time)
+  );
+  float rainDim = 1.0 - u_rain * 0.30;
 
   // Directional sunlight illumination + optional underwater night pool lamp glow
-  float sunPoolGrad = clamp(0.82 + 0.24 * (xz.x * 0.35 - xz.y * 0.45), 0.65, 1.25);
+  float sunPoolGrad = clamp(0.84 + 0.22 * (xz.x * 0.35 - xz.y * 0.45), 0.68, 1.22);
   float lampPool = exp(-dot(xz, xz) * 0.65);
   float lampBoost = 1.0 + u_nightGlow * lampPool * 1.15;
-  vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.38);
-  vec3 col = floorAlbedo * (0.66 * sunPoolGrad * lampBoost);
-  col += (sunlitCaustic * (sunWeb * (0.42 - u_biolum * 0.28) * rainDim) + mix(prismCaustic, sunlitCaustic * prismCaustic, 0.45)) * sunPoolGrad * lampBoost;
+  vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.46);
+  vec3 col = floorAlbedo * (0.76 * sunPoolGrad * lampBoost);
+  col += (sunlitCaustic * sunWebRgb * ((0.52 - u_biolum * 0.34) * rainDim) + mix(prismCaustic, sunlitCaustic * prismCaustic, 0.45)) * sunPoolGrad * lampBoost;
   return col;
 }
 
 vec3 envColor(vec3 r) {
   vec3 d = normalize(r);
   vec3 L = normalize(u_sunDir);
-  // Continuous glossy liquid sky reflection parameterized by active mood preset
-  float dome = d.y * 0.65 + 0.35 * (d.x * 0.55 - d.z * 0.45)
-    + 0.24 * sin(d.x * 2.8 + d.z * 2.1)
-    + 0.14 * cos(d.z * 3.4 - d.x * 1.9);
-  float t = clamp(dome * 0.55 + 0.42, 0.0, 1.0);
+  // Clean natural sky dome gradient without milky artificial specular bands
+  float elev = clamp(d.y * 0.85 + 0.15, 0.0, 1.0);
+  vec3 horizon = mix(u_skyBright, u_sunColor, 0.14 * (1.0 - u_biolum));
+  vec3 zenith = mix(u_skyDeep, u_skyMid, 0.45);
+  vec3 col = mix(horizon, u_skyMid, smoothstep(0.0, 0.52, elev));
+  col = mix(col, zenith, smoothstep(0.45, 0.96, elev));
 
-  vec3 vividMid = mix(u_skyMid, u_skyBright, 0.38);
-  vec3 warmSunWhite = mix(vec3(0.96, 0.995, 1.0), u_sunColor, 0.52);
-
-  vec3 col = mix(u_skyDeep, u_skyMid, smoothstep(0.06, 0.42, t));
-  col = mix(col, vividMid, smoothstep(0.34, 0.68, t));
-  col = mix(col, u_skyBright, smoothstep(0.64, 0.86, t));
-  col = mix(col, warmSunWhite, smoothstep(0.82, 0.97, t) * (1.0 - u_biolum * 0.65));
-
-  float band = smoothstep(0.48, 0.56, t) * (1.0 - smoothstep(0.56, 0.66, t));
-  col = mix(col, u_skyBright, band * 0.45);
-  col = mix(col, warmSunWhite, pow(band, 2.2) * 0.35 * (1.0 - u_biolum * 0.65));
-
-  // Sunlight / moonlight reflection disc + soft atmospheric halo (softened under rain clouds)
+  // Crisp sun / moon reflection disc + natural atmospheric scatter
   float sunDot = max(dot(d, L), 0.0);
-  float sunHalo = pow(sunDot, 10.0);
-  float sunCore = pow(sunDot, 96.0);
-  float clearSky = 1.0 - u_rain * 0.68;
-  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.65 * (1.0 - u_biolum * 0.7) * clearSky);
-  col += u_sunColor * sunCore * (2.2 * (1.0 - u_biolum * 0.65) * clearSky);
-  vec3 stormSky = mix(u_skyDeep, vec3(0.32, 0.42, 0.54), 0.45);
-  col = mix(col, stormSky, u_rain * 0.34);
+  float sunHalo = pow(sunDot, 16.0);
+  float sunCore = pow(sunDot, 180.0);
+  float clearSky = 1.0 - u_rain * 0.72;
+  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.38 * (1.0 - u_biolum * 0.7) * clearSky);
+  col += u_sunColor * sunCore * (2.6 * (1.0 - u_biolum * 0.65) * clearSky);
+  vec3 stormSky = mix(u_skyDeep, vec3(0.32, 0.42, 0.54), 0.48);
+  col = mix(col, stormSky, u_rain * 0.38);
   return col;
 }
 
@@ -381,7 +383,7 @@ void main() {
   float splash = simState.b;
 
   vec2 simSlope = simGrad * 3.8;
-  vec2 swellSlope = vec2(-swellNormal.x / swellNormal.y, -swellNormal.z / swellNormal.y) * 0.28;
+  vec2 swellSlope = vec2(-swellNormal.x / swellNormal.y, -swellNormal.z / swellNormal.y) * 0.16;
   vec2 organicSlope = liquidSlope(v_world.xz, u_time);
   vec2 slope = simSlope + swellSlope + organicSlope;
   vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
@@ -390,8 +392,8 @@ void main() {
   vec3 L = normalize(u_sunDir);
   float NoV = max(dot(N, V), 0.0);
 
-  // Balanced Fresnel: clearly reveals refracted pool floor tiles while keeping glossy liquid crests
-  float fresnel = mix(0.26, 0.88, pow(1.0 - NoV, 2.4));
+  // Physical water Fresnel (F0 ~ 0.02-0.05): crystal-clear view of pool floor tiles & caustics, crisp grazing reflections
+  float fresnel = mix(0.05, 0.72, pow(1.0 - NoV, 4.0));
   vec3 reflected = envColor(reflect(-V, N));
 
   vec3 I = refract(-V, N, 1.0 / u_ior);
@@ -400,31 +402,31 @@ void main() {
     float t = (u_floorY - v_world.y) / I.y;
     vec3 hit = v_world + I * t;
     float path = length(hit - v_world);
-    through = floorColor(hit.xz) * exp(-vec3(0.40, 0.13, 0.02) * path);
+    through = floorColor(hit.xz) * exp(-u_absorption * path * 1.15);
   } else {
     through = u_skyDeep;
   }
 
-  // Sunlight directional glints + subtle underwater volumetric sunbeams
+  // Crisp pinpoint sunlight glints + subtle underwater sunbeams
   vec3 H = normalize(L + V);
-  float specSparkle = pow(max(dot(N, H), 0.0), 180.0);
-  float specSun = pow(max(dot(N, H), 0.0), 36.0);
+  float specSparkle = pow(max(dot(N, H), 0.0), 320.0);
+  float specSun = pow(max(dot(N, H), 0.0), 56.0);
 
   // Subtle diagonal sunbeam shafts streaming across the water
   float beamCoord = dot(v_world.xz, normalize(vec2(0.82, -0.57)));
   float shafts = 0.5 + 0.5 * sin(beamCoord * 3.6 + sin(v_world.z * 1.4 - u_time * 0.35) * 0.8);
-  shafts = pow(shafts, 3.0) * smoothstep(-1.4, 1.2, v_world.x * 0.45 - v_world.z * 0.75);
+  shafts = pow(shafts, 3.5) * smoothstep(-1.4, 1.2, v_world.x * 0.45 - v_world.z * 0.75);
 
-  float crease = smoothstep(0.22, 0.82, 1.0 - NoV) * smoothstep(0.22, 0.90, length(slope));
+  float crease = smoothstep(0.28, 0.86, 1.0 - NoV) * smoothstep(0.26, 0.92, length(slope));
   float rippleEdge = smoothstep(0.15, 1.05, length(simSlope));
 
-  // Keep waves translucent even during fast sweeps; add crisp sun glints, aerated foam & storm mood
+  // Keep water crystal clear with crisp sun glints & subtle aerated micro-sparkles
   float rainSunScale = 1.0 - u_rain * 0.45;
   vec3 col = mix(through, reflected, fresnel);
-  col = mix(col, u_skyDeep * 0.85, crease * 0.34);
-  col += mix(u_causticTint, u_sunColor, 0.60) * shafts * u_shaftStrength * (1.0 - u_rain * 0.72);
-  col += mix(u_causticTint, u_sunColor, 0.45) * (specSun * 0.22 + splash * specSun * 0.45) * rainSunScale;
-  col += u_sunColor * (specSparkle * (1.85 + splash * 1.2) + rippleEdge * specSparkle * 1.1) * u_sunIntensity * rainSunScale;
+  col = mix(col, u_skyDeep * 0.85, crease * 0.20);
+  col += mix(u_causticTint, u_sunColor, 0.55) * shafts * u_shaftStrength * (1.0 - u_rain * 0.75);
+  col += mix(u_causticTint, u_sunColor, 0.55) * (specSun * 0.11 + splash * specSun * 0.32) * rainSunScale;
+  col += u_sunColor * (specSparkle * (2.1 + splash * 1.4) + rippleEdge * specSparkle * 1.2) * u_sunIntensity * rainSunScale;
 
   // Subtle aerated micro-sparkle on peak wave collisions while keeping water crystal-clear and translucent
   float peakSplash = smoothstep(0.42, 0.74, splash) * smoothstep(0.35, 1.15, length(simSlope));
