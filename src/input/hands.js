@@ -1,6 +1,5 @@
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { HAND } from '../config.js';
-import { fingertipHit, isTouching } from './touch.js';
 
 async function landmarker(fileset, delegate) {
   return HandLandmarker.createFromOptions(fileset, {
@@ -26,7 +25,7 @@ export async function createHands(video) {
   let cached = null;
 
   return {
-    sample(camera, aspect, pool) {
+    sample() {
       if (video.readyState < 2) return null;
       if (video.currentTime === lastVideoTime) {
         return cached && { ...cached, fresh: false };
@@ -36,14 +35,9 @@ export async function createHands(video) {
       if (stamp <= lastStamp) stamp = lastStamp + 1;
       lastStamp = stamp;
       const result = detector.detectForVideo(video, stamp);
-      const landmarks = result.landmarks && result.landmarks[0];
-      if (!landmarks) {
-        cached = { touching: false, hit: null };
-        return { ...cached, fresh: true };
-      }
+      const list = result.landmarks || [];
       cached = {
-        touching: isTouching(landmarks),
-        hit: fingertipHit(landmarks[8], camera, aspect, pool),
+        hands: list.map((landmarks) => ({ landmarks })),
       };
       return { ...cached, fresh: true };
     },

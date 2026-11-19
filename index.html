@@ -5,31 +5,152 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pool</title>
   <style>
+    :root {
+      --ui-text: rgba(240, 250, 255, 0.94);
+      --ui-text-active: #ffffff;
+      --ui-divider: rgba(185, 238, 255, 0.34);
+      --ui-focus: rgba(220, 248, 255, 0.88);
+      --ui-cam-border: rgba(185, 238, 255, 0.5);
+    }
     html, body { margin: 0; height: 100%; background: #042033; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+    #pool { display: block; width: 100vw; height: 100vh; touch-action: none; }
+    #hud {
+      position: fixed; inset: 0;
+      width: 100vw; height: 100vh;
+      pointer-events: none; z-index: 2;
+    }
     #gate {
       position: fixed; inset: 0;
       display: flex; align-items: center; justify-content: center;
       font-family: system-ui, sans-serif;
-      pointer-events: none;
+      pointer-events: none; z-index: 5;
     }
     #gate button {
-      background: transparent; color: white;
+      background: rgba(4, 24, 64, 0.35); color: var(--ui-text-active);
       border: 1px solid rgba(255,255,255,0.75);
-      padding: 0.8rem 1.2rem; font-size: 1rem;
+      backdrop-filter: blur(8px);
+      padding: 0.82rem 1.45rem; font-size: 1rem; font-weight: 500;
+      letter-spacing: 0.01em;
       border-radius: 999px; cursor: pointer;
       pointer-events: auto;
+      text-shadow: 0 1px 4px rgba(2, 12, 34, 0.65);
+      transition: transform 120ms ease, color 140ms ease;
     }
-    #gate.hidden { display: none; }
-    video {
-      position: fixed; width: 1px; height: 1px;
-      opacity: 0; pointer-events: none;
+    .toolbar {
+      position: fixed; top: 14px; left: 14px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      z-index: 4;
+      font-family: system-ui, sans-serif;
     }
+    .pill {
+      background: rgba(6, 26, 66, 0.48);
+      color: var(--ui-text);
+      border: 1px solid rgba(185, 238, 255, 0.35);
+      backdrop-filter: blur(10px);
+      padding: 0.34rem 0.72rem;
+      font-size: 0.76rem;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      font-family: system-ui, sans-serif;
+      border-radius: 999px;
+      cursor: pointer;
+      text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68), 0 0 10px rgba(2, 16, 48, 0.32);
+      transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease;
+    }
+    .pill:hover { background: rgba(12, 42, 96, 0.68); color: #ffffff; }
+    .pill.active {
+      background: rgba(38, 138, 224, 0.62);
+      border-color: rgba(220, 248, 255, 0.85);
+      color: var(--ui-text-active);
+      text-shadow: 0 1px 4px rgba(2, 12, 34, 0.72);
+    }
+    .pill:active, #gate button:active {
+      transform: translateY(1px) scale(0.985);
+    }
+    .pill:focus-visible, #gate button:focus-visible {
+      outline: 2px solid var(--ui-focus);
+      outline-offset: 2px;
+    }
+    body.water-glass-ready .pill,
+    body.water-glass-ready .pill:hover,
+    body.water-glass-ready .pill.active,
+    body.water-glass-ready #gate button,
+    body.water-glass-ready #gesture-badge {
+      background: transparent;
+      border-color: transparent;
+      backdrop-filter: none;
+    }
+    .divider {
+      width: 1px; height: 16px;
+      background: var(--ui-divider);
+      margin: 0 2px;
+      transition: background 240ms ease;
+    }
+    #cam-controls {
+      position: fixed; right: 16px; bottom: 144px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+      z-index: 4;
+    }
+    #cam-row {
+      display: flex; gap: 5px; align-items: center;
+    }
+    #gesture-badge {
+      background: rgba(6, 26, 66, 0.62);
+      color: var(--ui-text);
+      border: 1px solid rgba(165, 235, 255, 0.42);
+      backdrop-filter: blur(10px);
+      padding: 0.28rem 0.70rem;
+      font-size: 0.74rem;
+      font-weight: 500;
+      font-family: system-ui, sans-serif;
+      border-radius: 999px;
+      text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68);
+      pointer-events: none;
+    }
+    #cam {
+      position: fixed; right: 16px; bottom: 16px;
+      width: 160px; height: 120px;
+      object-fit: cover; border-radius: 12px;
+      border: 1px solid var(--ui-cam-border);
+      box-shadow: 0 8px 24px rgba(2, 18, 56, 0.35);
+      transform: scaleX(-1);
+      pointer-events: none; z-index: 3;
+      transition: border-color 240ms ease;
+    }
+    #cam.unmirrored { transform: scaleX(1); }
+    #cam.hidden {
+      display: block !important;
+      width: 1px; height: 1px;
+      opacity: 0; border: 0; box-shadow: none;
+    }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <canvas id="pool"></canvas>
-  <video id="cam" playsinline autoplay muted></video>
+  <canvas id="hud" aria-hidden="true"></canvas>
+
+  <div class="toolbar" role="toolbar" aria-label="Pool controls">
+    <button class="pill active" type="button" data-theme="sunlit" title="Shortcut: 1">Sunlit</button>
+    <button class="pill" type="button" data-theme="sunset" title="Shortcut: 2">Sunset</button>
+    <button class="pill" type="button" data-theme="night" title="Shortcut: 3">Night</button>
+    <button class="pill" type="button" data-theme="biolum" title="Shortcut: 4">Biolum</button>
+    <span class="divider" aria-hidden="true"></span>
+    <button id="rain-toggle" class="pill" type="button" aria-pressed="false" title="Shortcut: R">Rain</button>
+    <button id="petals-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: P">Petals</button>
+    <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: M">Sound</button>
+  </div>
+
+  <div id="cam-controls">
+    <div id="gesture-badge" class="hidden">Show hand…</div>
+    <div id="cam-row">
+      <button id="mirror-toggle" class="pill hidden" type="button" aria-pressed="true">Mirror: On</button>
+      <button id="sens-toggle" class="pill hidden" type="button">Splash: Med</button>
+      <button id="cam-toggle" class="pill hidden" type="button" aria-pressed="true">Hide camera</button>
+    </div>
+  </div>
+
+  <video id="cam" class="hidden" playsinline autoplay muted></video>
   <div id="gate"><button id="start" type="button">Touch the water</button></div>
   <script type="module" src="/src/main.js"></script>
 </body>

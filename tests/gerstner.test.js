@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { WAVES } from '../src/config.js';
-import { gerstnerAt } from '../src/sim/gerstner.js';
+import { CAMERA, SWELL_TIME_SCALE, WAVES } from '../src/config.js';
+import { ndcToRay } from '../src/math.js';
+import { gerstnerAt, gerstnerHeightAt, rayGerstnerSurface } from '../src/sim/gerstner.js';
 
 function referenceHeight(x, z, time, waves) {
   let y = 0;
@@ -36,5 +37,26 @@ describe('gerstnerAt', () => {
     const length = Math.hypot(g.normal[0], g.normal[1], g.normal[2]);
     expect(length).toBeCloseTo(1, 5);
     expect(g.normal[1]).toBeGreaterThan(0.8);
+  });
+});
+
+describe('rayGerstnerSurface', () => {
+  it('finds a point on the ray that matches the displaced Gerstner height', () => {
+    const swellTime = 1.5 * SWELL_TIME_SCALE;
+    const ray = ndcToRay(0.25, -0.35, CAMERA, 16 / 9);
+    const hit = rayGerstnerSurface(ray.origin, ray.dir, swellTime, WAVES);
+    expect(hit).not.toBeNull();
+    expect(hit[1]).toBeCloseTo(gerstnerHeightAt(hit[0], hit[2], swellTime, WAVES), 4);
+    const t = (hit[1] - ray.origin[1]) / ray.dir[1];
+    expect(t).toBeGreaterThan(0);
+    expect(ray.origin[0] + ray.dir[0] * t).toBeCloseTo(hit[0], 5);
+    expect(ray.origin[2] + ray.dir[2] * t).toBeCloseTo(hit[2], 5);
+  });
+
+  it('falls back to y = 0 when there are no waves', () => {
+    const ray = ndcToRay(0, 0, CAMERA, 16 / 9);
+    const hit = rayGerstnerSurface(ray.origin, ray.dir, 0, []);
+    expect(hit).not.toBeNull();
+    expect(hit[1]).toBeCloseTo(0, 5);
   });
 });
