@@ -67,6 +67,7 @@ describe('createWaterAudio', () => {
     expect(() => audio.playSweep(1.0, 1050)).not.toThrow();
     expect(() => audio.playSplash(1.0, 1100)).not.toThrow();
     expect(() => audio.playClap(1200)).not.toThrow();
+    expect(() => audio.playThunder(0.9, 1300)).not.toThrow();
   });
 
   it('synthesizes drop, sweep, splash, and clap sounds when unlocked and respects rate limits & mute', () => {
@@ -89,9 +90,14 @@ describe('createWaterAudio', () => {
     audio.playDrop(0.8, 1010);
     expect(ctx.events.filter((e) => e[0] === 'oscStart').length).toBe(oscAfterFirst);
 
-    // Sweep triggers filtered noise
+    // Sweep starts a single continuous filtered noise stream and modulates it smoothly
     audio.playSweep(1.2, 1200);
-    expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBeGreaterThanOrEqual(1);
+    const noiseAfterSweep = ctx.events.filter((e) => e[0] === 'noiseStart').length;
+    expect(noiseAfterSweep).toBeGreaterThanOrEqual(1);
+    audio.playSweep(1.6, 1300);
+    audio.playSweep(1.9, 1400);
+    // Repeated swipes reuse the continuous voice instead of spawning percussive bursts
+    expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBe(noiseAfterSweep);
 
     // Splash and clap trigger layered sounds
     const beforeSplash = ctx.events.length;
@@ -140,5 +146,32 @@ describe('createWaterAudio', () => {
     expect(audio.isRainActive()).toBe(false);
     const rampDowns = ctx.events.filter((e) => e[0] === 'lin' && e[1] <= 0.001);
     expect(rampDowns.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('synthesizes layered rolling thunder and respects cooldown and mute', () => {
+    let ctx = null;
+    const Ctor = function MockCtor() {
+      ctx = makeMockAudioContext();
+      return ctx;
+    };
+    const audio = createWaterAudio({ AudioContextCtor: Ctor });
+    audio.unlock();
+
+    const oscBefore = ctx.events.filter((e) => e[0] === 'oscStart').length;
+    const noiseBefore = ctx.events.filter((e) => e[0] === 'noiseStart').length;
+    audio.playThunder(0.9, 5000);
+    const oscAfter = ctx.events.filter((e) => e[0] === 'oscStart').length;
+    const noiseAfter = ctx.events.filter((e) => e[0] === 'noiseStart').length;
+    expect(oscAfter).toBeGreaterThan(oscBefore);
+    expect(noiseAfter).toBeGreaterThan(noiseBefore);
+
+    // Cooldown prevents immediate overlapping thunder strike
+    audio.playThunder(0.9, 5300);
+    expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBe(noiseAfter);
+
+    // Mute blocks thunder
+    audio.setMuted(true);
+    audio.playThunder(0.9, 9000);
+    expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBe(noiseAfter);
   });
 });

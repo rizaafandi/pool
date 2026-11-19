@@ -103,6 +103,7 @@ export function projectFloater(item, camera, aspect, cssWidth, cssHeight, swellT
     lookAt(camera.eye, camera.target, [0, 1, 0]),
   );
   const y = gerstnerHeightAt(item.x, item.z, swellTime, waves);
+  const g = gerstnerAt(item.x, item.z, swellTime, waves);
   const clip = transformPoint(matrix, [item.x, y, item.z]);
   if (clip[3] <= 0.01) return null;
   const ndcX = clip[0] / clip[3];
@@ -113,6 +114,24 @@ export function projectFloater(item, camera, aspect, cssWidth, cssHeight, swellT
   const screenY = (0.5 - ndcY * 0.5) * cssHeight;
   const focalPx = (cssHeight * 0.5) / Math.tan(camera.fovY * 0.5);
   const radiusPx = Math.max(5, (item.size * focalPx) / clip[3]);
+
+  // Compute local perspective foreshortening of the horizontal pool plane at this blossom
+  const eps = 0.05;
+  const clipX = transformPoint(matrix, [item.x + eps, y, item.z]);
+  const clipZ = transformPoint(matrix, [item.x, y, item.z + eps]);
+  let aspectY = 0.85;
+  if (clipX[3] > 0.01 && clipZ[3] > 0.01) {
+    const pxX = ((clipX[0] / clipX[3]) * 0.5 + 0.5) * cssWidth;
+    const pyX = (0.5 - (clipX[1] / clipX[3]) * 0.5) * cssHeight;
+    const pxZ = ((clipZ[0] / clipZ[3]) * 0.5 + 0.5) * cssWidth;
+    const pyZ = (0.5 - (clipZ[1] / clipZ[3]) * 0.5) * cssHeight;
+    const rx = Math.hypot(pxX - x, pyX - screenY);
+    const rz = Math.hypot(pxZ - x, pyZ - screenY);
+    if (rx > 1e-4) {
+      aspectY = Math.min(1.0, Math.max(0.55, rz / rx));
+    }
+  }
+
   return {
     x,
     y: screenY,
@@ -120,5 +139,8 @@ export function projectFloater(item, camera, aspect, cssWidth, cssHeight, swellT
     angle: item.angle,
     petals: item.petals || 5,
     bob: y,
+    aspectY,
+    tiltX: g.normal[0],
+    tiltZ: g.normal[2],
   };
 }

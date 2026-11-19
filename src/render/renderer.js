@@ -205,7 +205,7 @@ export function createRenderer(canvas) {
       read = write;
       write = swap;
     },
-    draw(timeSeconds, uiPills = null) {
+    draw(timeSeconds, uiPills = null, lightning = 0, rainIntensity = 0) {
       blendTheme(activeTheme, targetTheme, 0.08);
       sceneTarget.resize(canvas.width, canvas.height);
 
@@ -280,6 +280,8 @@ export function createRenderer(canvas) {
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_shaftStrength'), activeTheme.shaftStrength);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_biolum'), activeTheme.biolum);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_nightGlow'), activeTheme.nightGlow);
+      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_lightning'), lightning);
+      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_rain'), rainIntensity);
       gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);

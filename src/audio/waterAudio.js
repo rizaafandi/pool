@@ -7,8 +7,12 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
   let ctx = null;
   let noiseBuffer = null;
   let rainNoiseBuffer = null;
+  let thunderNoiseBuffer = null;
   let rainSource = null;
   let rainGain = null;
+  let sweepSource = null;
+  let sweepFilter = null;
+  let sweepGain = null;
   let rainActive = false;
   let muted = false;
   let lastDropAt = -Infinity;
@@ -16,6 +20,7 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
   let lastSweepAt = -Infinity;
   let lastSplashAt = -Infinity;
   let lastClapAt = -Infinity;
+  let lastThunderAt = -Infinity;
 
   function ensureNoiseBuffers(c) {
     const rate = c.sampleRate || 44100;
@@ -64,6 +69,21 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
         data[i] = data[i] * w + data[length - fadeSamples + i] * (1 - w);
       }
       rainNoiseBuffer = buffer;
+    }
+
+    if (!thunderNoiseBuffer && c.createBuffer) {
+      const length = Math.max(1, Math.floor(rate * 3.6));
+      const buffer = c.createBuffer(1, length, rate);
+      const data = buffer.getChannelData(0);
+      let brown = 0;
+      let pink = 0;
+      for (let i = 0; i < length; i++) {
+        const white = Math.random() * 2 - 1;
+        brown = (brown + white * 0.045) * 0.992;
+        pink = pink * 0.96 + white * 0.14;
+        data[i] = Math.max(-1, Math.min(1, brown * 1.9 + pink * 0.45));
+      }
+      thunderNoiseBuffer = buffer;
     }
   }
 
@@ -179,12 +199,28 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
     setMuted(nextMuted) {
       muted = Boolean(nextMuted);
       syncRainBed();
+      if (muted && sweepGain && ctx) {
+        const t = ctx.currentTime;
+        if (typeof sweepGain.gain.cancelScheduledValues === 'function') {
+          sweepGain.gain.cancelScheduledValues(t);
+        }
+        sweepGain.gain.setValueAtTime(Math.max(0.0001, sweepGain.gain.value || 0.0001), t);
+        sweepGain.gain.linearRampToValueAtTime(0.0001, t + 0.08);
+      }
     },
 
     toggleMute() {
       muted = !muted;
       if (!muted) ensureContext();
       syncRainBed();
+      if (muted && sweepGain && ctx) {
+        const t = ctx.currentTime;
+        if (typeof sweepGain.gain.cancelScheduledValues === 'function') {
+          sweepGain.gain.cancelScheduledValues(t);
+        }
+        sweepGain.gain.setValueAtTime(Math.max(0.0001, sweepGain.gain.value || 0.0001), t);
+        sweepGain.gain.linearRampToValueAtTime(0.0001, t + 0.08);
+      }
       return muted;
     },
 
@@ -224,13 +260,56 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
     },
 
     playSweep(speed = 0.8, nowMs = performance.now()) {
-      if (muted || nowMs - lastSweepAt < 120) return;
+      if (muted || nowMs - lastSweepAt < 35) return;
       const c = ensureContext();
-      if (!c) return;
+      if (!c || !rainNoiseBuffer || !c.createBufferSource || !c.createBiquadFilter || !c.createGain) return;
       lastSweepAt = nowMs;
       const t = c.currentTime;
-      const clamped = Math.min(2.0, Math.max(0.2, speed));
-      filteredNoise(c, t, 520 + clamped * 240, 1.8, 0.06 * Math.min(1, clamped), 0.18);
+      const clamped = Math.min(2.2, Math.max(0.15, speed));
+
+      if (!sweepSource) {
+        const src = c.createBufferSource();
+        src.buffer = rainNoiseBuffer;
+        src.loop = true;
+
+        const filter = c.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(420, t);
+        filter.Q.setValueAtTime(0.85, t);
+
+        const gain = c.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(c.destination);
+        src.start(t);
+
+        sweepSource = src;
+        sweepFilter = filter;
+        sweepGain = gain;
+      }
+
+      const targetFreq = 360 + clamped * 340;
+      const targetGain = Math.min(0.11, 0.022 + clamped * 0.042);
+
+      if (typeof sweepFilter.frequency.cancelScheduledValues === 'function') {
+        sweepFilter.frequency.cancelScheduledValues(t);
+      }
+      sweepFilter.frequency.setValueAtTime(
+        Math.max(120, sweepFilter.frequency.value || targetFreq),
+        t,
+      );
+      sweepFilter.frequency.linearRampToValueAtTime(targetFreq, t + 0.08);
+      sweepFilter.frequency.linearRampToValueAtTime(280, t + 0.34);
+
+      if (typeof sweepGain.gain.cancelScheduledValues === 'function') {
+        sweepGain.gain.cancelScheduledValues(t);
+      }
+      const curGain = Math.max(0.0001, sweepGain.gain.value || 0.0001);
+      sweepGain.gain.setValueAtTime(curGain, t);
+      sweepGain.gain.linearRampToValueAtTime(targetGain, t + 0.075);
+      sweepGain.gain.linearRampToValueAtTime(0.0001, t + 0.32);
     },
 
     playSplash(intensity = 1.0, nowMs = performance.now()) {
@@ -257,6 +336,74 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
       bubbleChirp(c, t + 0.035, 310, 680, 0.06, 0.08);
       bubbleChirp(c, t + 0.075, 440, 890, 0.055, 0.075);
       bubbleChirp(c, t + 0.12, 560, 1080, 0.04, 0.07);
+    },
+
+    playThunder(intensity = 0.85, nowMs = performance.now()) {
+      if (muted || nowMs - lastThunderAt < 1500) return;
+      const c = ensureContext();
+      if (!c) return;
+      lastThunderAt = nowMs;
+      const t = c.currentTime;
+      const amp = Math.min(1.2, Math.max(0.35, intensity));
+
+      // 1. Sub-bass pressure boom
+      if (c.createOscillator && c.createGain) {
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(68 + Math.random() * 14, t);
+        osc.frequency.exponentialRampToValueAtTime(28, t + 1.35);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(0.11 * amp, t + 0.09);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.45);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(t);
+        osc.stop(t + 1.5);
+      }
+
+      // 2. Rolling lowpass thunder rumble with secondary echo swell
+      if (thunderNoiseBuffer && c.createBufferSource && c.createBiquadFilter && c.createGain) {
+        const dur = 2.6 + Math.random() * 0.9;
+        const rumble = c.createBufferSource();
+        rumble.buffer = thunderNoiseBuffer;
+        const lp = c.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(220 + amp * 120, t);
+        lp.frequency.exponentialRampToValueAtTime(52, t + dur);
+        lp.Q.setValueAtTime(0.85, t);
+        const gain = c.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(0.24 * amp, t + 0.11);
+        gain.gain.linearRampToValueAtTime(0.11 * amp, t + 0.55);
+        gain.gain.linearRampToValueAtTime(0.19 * amp, t + 0.95);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        rumble.connect(lp);
+        lp.connect(gain);
+        gain.connect(c.destination);
+        rumble.start(t);
+        rumble.stop(t + dur + 0.05);
+
+        // 3. Sharper mid-low sky crack for closer/stronger strikes
+        if (amp > 0.55) {
+          const crack = c.createBufferSource();
+          crack.buffer = thunderNoiseBuffer;
+          const bp = c.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.setValueAtTime(420 + Math.random() * 180, t);
+          bp.frequency.exponentialRampToValueAtTime(110, t + 0.42);
+          bp.Q.setValueAtTime(1.1, t);
+          const cGain = c.createGain();
+          cGain.gain.setValueAtTime(0.0001, t);
+          cGain.gain.linearRampToValueAtTime(0.16 * amp, t + 0.025);
+          cGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
+          crack.connect(bp);
+          bp.connect(cGain);
+          cGain.connect(c.destination);
+          crack.start(t);
+          crack.stop(t + 0.5);
+        }
+      }
     },
   };
 }

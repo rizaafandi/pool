@@ -43,33 +43,30 @@ function drawRainSplashes(ctx, splashes, width, height, theme) {
     const y = s.screenY * height;
     const scale = s.scale || 1;
 
-    // Perspective-foreshortened surface splash ring + subtle depth shadow so it reads over bright caustics
-    const ringR = (4.5 + t * 28) * scale;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(1, 0.58);
-    ctx.beginPath();
-    ctx.arc(0, 1.5, ringR, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(4, 22, 58, ${(fade * 0.24).toFixed(3)})`;
-    ctx.lineWidth = Math.max(1.0, (2.6 - t * 1.3) * scale);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(0, 0, ringR, 0, Math.PI * 2);
-    ctx.strokeStyle = rgbaFromRgb(rainRgb, fade * 0.86);
-    ctx.lineWidth = Math.max(0.85, (2.2 - t * 1.1) * scale);
-    ctx.stroke();
-
-    if (t < 0.5) {
-      const innerT = t / 0.5;
-      const innerR = (2.0 + innerT * 11) * scale;
+    // Perspective-foreshortened surface splash ring (for raindrop impacts; skipped on swipe sprays)
+    if (s.showRing !== false) {
+      const ringR = (4.0 + t * 24) * scale;
+      const ringAspect = s.ringAspect || 0.88;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(1, ringAspect);
       ctx.beginPath();
-      ctx.arc(0, 0, innerR, 0, Math.PI * 2);
-      ctx.strokeStyle = rgbaFromRgb(tipRgb, (1 - innerT) * 0.88);
-      ctx.lineWidth = 1.5 * scale;
+      ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = rgbaFromRgb(rainRgb, fade * 0.48);
+      ctx.lineWidth = Math.max(0.75, (1.6 - t * 0.9) * scale);
       ctx.stroke();
+
+      if (t < 0.45) {
+        const innerT = t / 0.45;
+        const innerR = (1.8 + innerT * 9.5) * scale;
+        ctx.beginPath();
+        ctx.arc(0, 0, innerR, 0, Math.PI * 2);
+        ctx.strokeStyle = rgbaFromRgb(tipRgb, (1 - innerT) * 0.58);
+        ctx.lineWidth = 1.1 * scale;
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    ctx.restore();
 
     // Airborne glistening crown droplets arcing upward from impact
     const beads = Array.isArray(s.beads) ? s.beads : [];
@@ -78,9 +75,16 @@ function drawRainSplashes(ctx, splashes, width, height, theme) {
     if (beadAlpha > 0.02 && beads.length > 0) {
       ctx.save();
       for (const b of beads) {
-        const bx = x + b.vx * age;
-        const by = y + b.vy * age + 135 * age * age;
-        if (by > y + 6) continue;
+        let bx;
+        let by;
+        if (b.screenX !== undefined && b.screenY !== undefined) {
+          bx = b.screenX * width;
+          by = b.screenY * height;
+        } else {
+          bx = x + b.vx * age;
+          by = y + b.vy * age + 135 * age * age;
+          if (by > y + 6) continue;
+        }
         const br = b.size * 1.2 * (1 - t * 0.4);
         ctx.beginPath();
         ctx.arc(bx, by + 1, br + 0.5, 0, Math.PI * 2);
@@ -96,11 +100,33 @@ function drawRainSplashes(ctx, splashes, width, height, theme) {
   }
 }
 
-function drawRainStreaks(ctx, streaks, width, height, theme) {
+function drawLightningFlash(ctx, lightning, width, height) {
+  if (!lightning || !(lightning.intensity > 0.01)) return;
+  const flash = Math.min(1, lightning.intensity);
+  ctx.save();
+  if (typeof ctx.createRadialGradient === 'function' && typeof ctx.fillRect === 'function') {
+    const cx = (lightning.x ?? 0.5) * width;
+    const cy = (lightning.y ?? 0.1) * height;
+    const radius = Math.hypot(width, height) * 0.95;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    grad.addColorStop(0, `rgba(232, 245, 255, ${(flash * 0.34).toFixed(3)})`);
+    grad.addColorStop(0.45, `rgba(195, 224, 255, ${(flash * 0.16).toFixed(3)})`);
+    grad.addColorStop(1, `rgba(165, 205, 255, ${(flash * 0.04).toFixed(3)})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+  } else if (typeof ctx.fillRect === 'function') {
+    ctx.fillStyle = `rgba(215, 236, 255, ${(flash * 0.22).toFixed(3)})`;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.restore();
+}
+
+function drawRainStreaks(ctx, streaks, width, height, theme, lightningIntensity = 0) {
   if (typeof ctx.moveTo !== 'function' || typeof ctx.lineTo !== 'function') return;
   const rainRgb = (theme && theme.rainRgb) || [224, 246, 255];
   const tipRgb = (theme && theme.rainTipRgb) || [255, 255, 255];
   const hasGradient = typeof ctx.createLinearGradient === 'function';
+  const flashBoost = 1 + Math.min(1, Math.max(0, lightningIntensity)) * 0.65;
 
   ctx.save();
   ctx.lineCap = 'round';
@@ -109,7 +135,7 @@ function drawRainStreaks(ctx, streaks, width, height, theme) {
     const y2 = d.y * height;
     const x1 = x2 - d.dx * width;
     const y1 = y2 - d.dy * height;
-    const alpha = Math.min(1, Math.max(0, d.alpha));
+    const alpha = Math.min(1, Math.max(0, d.alpha * flashBoost));
     if (alpha < 0.01) continue;
     const lw = d.width || 1.4;
 
@@ -152,21 +178,31 @@ function drawBlossom(ctx, f, theme) {
   const petalCore = (theme && theme.petalCore) || 'rgba(255, 210, 110, 0.95)';
   const petals = f.petals || 5;
   const r = f.radiusPx;
+  const baseAspectY = f.aspectY || 0.85;
+  const tiltX = f.tiltX || 0;
+  const tiltZ = f.tiltZ || 0;
+  const scaleX = Math.max(0.75, Math.min(1.12, 1.0 - Math.abs(tiltX) * 0.35));
+  const scaleY = Math.max(0.52, Math.min(1.0, baseAspectY * (1.0 - tiltZ * 0.25)));
 
-  // Soft underwater shadow offset gently down-left
+  // Soft underwater shadow cast opposite to active theme's sun/moon direction
+  const sunDir = theme && Array.isArray(theme.sunDir) ? theme.sunDir : null;
+  const sunY = sunDir ? Math.max(0.35, sunDir[1]) : 0.86;
+  const shadowOffX = sunDir ? (-sunDir[0] / sunY) * r * 0.65 : -r * 0.28;
+  const shadowOffY = sunDir ? (-sunDir[2] / sunY) * r * 0.65 : r * 0.42;
+
   ctx.save();
-  ctx.translate(f.x - r * 0.28, f.y + r * 0.42);
-  ctx.scale(1.0, 0.78);
+  ctx.translate(f.x + shadowOffX, f.y + shadowOffY);
+  ctx.scale(scaleX, scaleY * 0.94);
   ctx.beginPath();
   ctx.arc(0, 0, r * 0.95, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(2, 16, 54, 0.22)';
   ctx.fill();
   ctx.restore();
 
-  // Translucent floating petals tilted slightly for pool perspective
+  // Translucent floating petals tilted by pool perspective and local wave normal
   ctx.save();
   ctx.translate(f.x, f.y);
-  ctx.scale(1.0, 0.82);
+  ctx.scale(scaleX, scaleY);
   ctx.rotate(f.angle);
   for (let i = 0; i < petals; i++) {
     ctx.save();
@@ -279,13 +315,15 @@ export function createOverlay({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-      // Draw floating blossoms & rain surface splashes clipped behind floating buttons
+      // Draw floating blossoms & surface splashes (rain + touch/hand) clipped behind floating buttons
       const floaters = extra && Array.isArray(extra.floaters) ? extra.floaters : [];
       const rainVisuals = extra && extra.rain ? extra.rain : null;
       const rainSplashes = rainVisuals && Array.isArray(rainVisuals.splashes) ? rainVisuals.splashes : [];
+      const extraSplashes = extra && Array.isArray(extra.splashes) ? extra.splashes : [];
+      const allSplashes = extraSplashes.length > 0 ? rainSplashes.concat(extraSplashes) : rainSplashes;
       const rainStreaks = rainVisuals && Array.isArray(rainVisuals.streaks) ? rainVisuals.streaks : [];
       const occluders = extra && Array.isArray(extra.occluders) ? extra.occluders : [];
-      if (floaters.length > 0 || rainSplashes.length > 0) {
+      if (floaters.length > 0 || allSplashes.length > 0) {
         const shouldClip = occluders.length > 0 && typeof ctx.clip === 'function' && typeof ctx.rect === 'function';
         if (shouldClip) {
           ctx.save();
@@ -299,17 +337,21 @@ export function createOverlay({
         for (const f of floaters) {
           drawBlossom(ctx, f, extra.theme);
         }
-        if (rainSplashes.length > 0) {
-          drawRainSplashes(ctx, rainSplashes, cssWidth, cssHeight, extra.theme);
+        if (allSplashes.length > 0) {
+          drawRainSplashes(ctx, allSplashes, cssWidth, cssHeight, extra.theme);
         }
         if (shouldClip) {
           ctx.restore();
         }
       }
 
-      // Draw falling raindrops in the air above the pool
+      // Draw falling raindrops in the air above the pool + periodic lightning sky glow
+      const lightning = rainVisuals && rainVisuals.lightning ? rainVisuals.lightning : null;
+      if (lightning && lightning.intensity > 0.01) {
+        drawLightningFlash(ctx, lightning, cssWidth, cssHeight);
+      }
       if (rainStreaks.length > 0) {
-        drawRainStreaks(ctx, rainStreaks, cssWidth, cssHeight, extra.theme);
+        drawRainStreaks(ctx, rainStreaks, cssWidth, cssHeight, extra.theme, lightning ? lightning.intensity : 0);
       }
 
       if (!cameraActive || !visible) {

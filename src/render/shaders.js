@@ -261,6 +261,8 @@ uniform vec3 u_causticTint;
 uniform float u_shaftStrength;
 uniform float u_biolum;
 uniform float u_nightGlow;
+uniform float u_lightning;
+uniform float u_rain;
 ${WAVE_UNIFORMS}
 ${GERSTNER_FN}
 ${SIM_SAMPLE_FN}
@@ -272,16 +274,25 @@ float hash21(vec2 p) {
 }
 
 vec3 sampleCausticSoft(vec2 uv) {
-  float r = 0.0045;
-  vec3 sum = texture(u_caustic, uv).rgb * 0.24;
-  sum += texture(u_caustic, uv + vec2(r, 0.0)).rgb * 0.12;
-  sum += texture(u_caustic, uv + vec2(-r, 0.0)).rgb * 0.12;
-  sum += texture(u_caustic, uv + vec2(0.0, r)).rgb * 0.12;
-  sum += texture(u_caustic, uv + vec2(0.0, -r)).rgb * 0.12;
-  sum += texture(u_caustic, uv + vec2(r, r)).rgb * 0.07;
-  sum += texture(u_caustic, uv + vec2(-r, r)).rgb * 0.07;
-  sum += texture(u_caustic, uv + vec2(r, -r)).rgb * 0.07;
-  sum += texture(u_caustic, uv + vec2(-r, -r)).rgb * 0.07;
+  float r = 0.0042;
+  vec2 disp = vec2(0.0020, -0.0014);
+  vec2 uvR = clamp(uv + disp, 0.0, 1.0);
+  vec2 uvB = clamp(uv - disp, 0.0, 1.0);
+
+  vec3 sum = vec3(
+    texture(u_caustic, uvR).r,
+    texture(u_caustic, uv).g,
+    texture(u_caustic, uvB).b
+  ) * 0.24;
+
+  sum += vec3(texture(u_caustic, uvR + vec2(r, 0.0)).r, texture(u_caustic, uv + vec2(r, 0.0)).g, texture(u_caustic, uvB + vec2(r, 0.0)).b) * 0.12;
+  sum += vec3(texture(u_caustic, uvR + vec2(-r, 0.0)).r, texture(u_caustic, uv + vec2(-r, 0.0)).g, texture(u_caustic, uvB + vec2(-r, 0.0)).b) * 0.12;
+  sum += vec3(texture(u_caustic, uvR + vec2(0.0, r)).r, texture(u_caustic, uv + vec2(0.0, r)).g, texture(u_caustic, uvB + vec2(0.0, r)).b) * 0.12;
+  sum += vec3(texture(u_caustic, uvR + vec2(0.0, -r)).r, texture(u_caustic, uv + vec2(0.0, -r)).g, texture(u_caustic, uvB + vec2(0.0, -r)).b) * 0.12;
+  sum += vec3(texture(u_caustic, uvR + vec2(r, r)).r, texture(u_caustic, uv + vec2(r, r)).g, texture(u_caustic, uvB + vec2(r, r)).b) * 0.07;
+  sum += vec3(texture(u_caustic, uvR + vec2(-r, r)).r, texture(u_caustic, uv + vec2(-r, r)).g, texture(u_caustic, uvB + vec2(-r, r)).b) * 0.07;
+  sum += vec3(texture(u_caustic, uvR + vec2(r, -r)).r, texture(u_caustic, uv + vec2(r, -r)).g, texture(u_caustic, uvB + vec2(r, -r)).b) * 0.07;
+  sum += vec3(texture(u_caustic, uvR + vec2(-r, -r)).r, texture(u_caustic, uv + vec2(-r, -r)).g, texture(u_caustic, uvB + vec2(-r, -r)).b) * 0.07;
   return sum;
 }
 
@@ -309,10 +320,11 @@ vec3 floorColor(vec2 xz) {
 
   vec3 floorAlbedo = mix(u_groutCol, tileCol, tileMask);
 
-  // Combine smooth organic sunlight caustic web + bounded interactive touch caustic
-  vec3 simCaustic = sampleCausticSoft(uv);
-  float simLum = clamp(dot(simCaustic, vec3(0.20, 0.50, 0.30)), 0.0, 1.0);
+  // Combine smooth organic sunlight caustic web + chromatic interactive touch caustic
+  vec3 simCaustic = clamp(sampleCausticSoft(uv), 0.0, 1.0);
+  vec3 prismCaustic = pow(simCaustic, vec3(1.45)) * 0.42;
   float sunWeb = causticWeb(xz, u_time);
+  float rainDim = 1.0 - u_rain * 0.24;
 
   // Directional sunlight illumination + optional underwater night pool lamp glow
   float sunPoolGrad = clamp(0.82 + 0.24 * (xz.x * 0.35 - xz.y * 0.45), 0.65, 1.25);
@@ -320,7 +332,7 @@ vec3 floorColor(vec2 xz) {
   float lampBoost = 1.0 + u_nightGlow * lampPool * 1.15;
   vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.38);
   vec3 col = floorAlbedo * (0.66 * sunPoolGrad * lampBoost);
-  col += sunlitCaustic * (sunWeb * (0.42 - u_biolum * 0.28) + pow(simLum, 1.6) * 0.34) * sunPoolGrad * lampBoost;
+  col += (sunlitCaustic * (sunWeb * (0.42 - u_biolum * 0.28) * rainDim) + mix(prismCaustic, sunlitCaustic * prismCaustic, 0.45)) * sunPoolGrad * lampBoost;
   return col;
 }
 
@@ -345,12 +357,15 @@ vec3 envColor(vec3 r) {
   col = mix(col, u_skyBright, band * 0.45);
   col = mix(col, warmSunWhite, pow(band, 2.2) * 0.35 * (1.0 - u_biolum * 0.65));
 
-  // Sunlight / moonlight reflection disc + soft atmospheric halo
+  // Sunlight / moonlight reflection disc + soft atmospheric halo (softened under rain clouds)
   float sunDot = max(dot(d, L), 0.0);
   float sunHalo = pow(sunDot, 10.0);
   float sunCore = pow(sunDot, 96.0);
-  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.65 * (1.0 - u_biolum * 0.7));
-  col += u_sunColor * sunCore * (2.2 * (1.0 - u_biolum * 0.65));
+  float clearSky = 1.0 - u_rain * 0.68;
+  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.65 * (1.0 - u_biolum * 0.7) * clearSky);
+  col += u_sunColor * sunCore * (2.2 * (1.0 - u_biolum * 0.65) * clearSky);
+  vec3 stormSky = mix(u_skyDeep, vec3(0.32, 0.42, 0.54), 0.45);
+  col = mix(col, stormSky, u_rain * 0.34);
   return col;
 }
 
@@ -403,12 +418,31 @@ void main() {
   float crease = smoothstep(0.22, 0.82, 1.0 - NoV) * smoothstep(0.22, 0.90, length(slope));
   float rippleEdge = smoothstep(0.15, 1.05, length(simSlope));
 
-  // Keep waves translucent even during fast sweeps; add crisp sun glints & bioluminescent glow
+  // Keep waves translucent even during fast sweeps; add crisp sun glints, aerated foam & storm mood
+  float rainSunScale = 1.0 - u_rain * 0.45;
   vec3 col = mix(through, reflected, fresnel);
   col = mix(col, u_skyDeep * 0.85, crease * 0.34);
-  col += mix(u_causticTint, u_sunColor, 0.60) * shafts * u_shaftStrength;
-  col += mix(u_causticTint, u_sunColor, 0.45) * (specSun * 0.22 + splash * specSun * 0.45);
-  col += u_sunColor * (specSparkle * (1.85 + splash * 1.2) + rippleEdge * specSparkle * 1.1) * u_sunIntensity;
+  col += mix(u_causticTint, u_sunColor, 0.60) * shafts * u_shaftStrength * (1.0 - u_rain * 0.72);
+  col += mix(u_causticTint, u_sunColor, 0.45) * (specSun * 0.22 + splash * specSun * 0.45) * rainSunScale;
+  col += u_sunColor * (specSparkle * (1.85 + splash * 1.2) + rippleEdge * specSparkle * 1.1) * u_sunIntensity * rainSunScale;
+
+  // Subtle aerated micro-sparkle on peak wave collisions while keeping water crystal-clear and translucent
+  float peakSplash = smoothstep(0.42, 0.74, splash) * smoothstep(0.35, 1.15, length(simSlope));
+  if (peakSplash > 0.01) {
+    float micro = hash21(floor(v_world.xz * 48.0 + u_time * 3.0));
+    float glint = smoothstep(0.62, 0.96, micro) * peakSplash;
+    col += mix(u_causticTint, vec3(0.92, 0.98, 1.0), 0.55) * (glint * 0.22 + peakSplash * 0.06) * rainSunScale;
+  }
+
+  // Subtle cool overcast atmosphere while raining
+  col = mix(col, col * vec3(0.76, 0.83, 0.92), u_rain * 0.38);
+
+  // Periodic storm lightning illuminating the reflected sky, ripple crests, and pool depth
+  if (u_lightning > 0.001) {
+    vec3 flashTint = vec3(0.76, 0.88, 1.0);
+    float crestCatch = 0.35 + 0.65 * fresnel + rippleEdge * 0.55 + specSun * 0.8;
+    col += flashTint * (u_lightning * (0.48 * crestCatch + 0.18));
+  }
 
   // Bioluminescent mode: active ripples, wakes, and collisions glow vivid neon aqua-cyan
   if (u_biolum > 0.001) {

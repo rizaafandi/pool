@@ -87,10 +87,15 @@ export const RAIN = {
   minStrength: -0.022,
   maxStrength: -0.038,
   ambientStreaks: 48,
-  windAngle: -0.15,
+  windX: -0.06,
+  windZ: 0.02,
   minFallDuration: 0.22,
   maxFallDuration: 0.36,
   splashDuration: 0.44,
+  firstThunderMinMs: 2200,
+  firstThunderMaxMs: 4800,
+  minThunderIntervalMs: 7500,
+  maxThunderIntervalMs: 16500,
 };
 
 export const FLOATERS = {

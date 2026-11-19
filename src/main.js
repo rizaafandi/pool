@@ -19,6 +19,7 @@ import { createRenderer } from './render/renderer.js';
 import { createAdaptiveQuality } from './perf/adaptiveQuality.js';
 import { createFloaters, projectFloater } from './sim/floaters.js';
 import { createRain } from './sim/rain.js';
+import { createSplashes } from './sim/splashes.js';
 import { createButtonReflectionTracker, themeCssVars } from './ui/buttonReflections.js';
 import { createOverlay } from './ui/overlay.js';
 
@@ -69,6 +70,7 @@ const handTracker = createHandTracker();
 const audio = createWaterAudio();
 const floaters = createFloaters();
 const rain = createRain();
+const splashes = createSplashes();
 const quality = createAdaptiveQuality();
 
 let hands = null;
@@ -169,9 +171,10 @@ canvas.addEventListener('pointerdown', (event) => {
   audio.unlock();
   const now = performance.now();
   const hit = eventHit(event);
-  activePointers.set(event.pointerId, { hit, time: now });
+  activePointers.set(event.pointerId, { hit, time: now, lastSprayAt: 0 });
   if (hit) {
     stamp(hit, 0, `p:${event.pointerId}`, 0.95);
+    splashes.spawnTap(hit.x, hit.z, 0.85, currentSwellTime);
     audio.playDrop(0.85, now);
   }
 });
@@ -181,13 +184,34 @@ canvas.addEventListener('pointermove', (event) => {
   const now = performance.now();
   const hit = eventHit(event);
   if (hit) {
-    const distMoved = prev.hit ? Math.hypot(hit.x - prev.hit.x, hit.z - prev.hit.z) : 1;
+    const dx = prev.hit ? hit.x - prev.hit.x : 0;
+    const dz = prev.hit ? hit.z - prev.hit.z : 0;
+    const distMoved = prev.hit ? Math.hypot(dx, dz) : 1;
     if (distMoved > 0.022) {
-      const dt = Math.max(0.02, (now - prev.time) / 1000);
-      const speed = Math.min(planarSpeed(prev.hit, hit, dt), 0.8);
-      stamp(hit, speed * 0.35, `p:${event.pointerId}`, 0.28);
-      if (speed > 0.35) audio.playSweep(speed, now);
-      activePointers.set(event.pointerId, { hit, time: now });
+      const dt = Math.max(0.016, (now - prev.time) / 1000);
+      const speed = Math.min(planarSpeed(prev.hit, hit, dt), 2.0);
+      // Interpolate gentle wake stamps along fast drags so ripples stay glassy and continuous
+      const subSteps = prev.hit ? Math.min(4, Math.max(1, Math.ceil(distMoved / 0.045))) : 1;
+      const wakeScale = Math.min(0.34, 0.22 + speed * 0.06) / subSteps;
+      for (let s = 1; s <= subSteps; s++) {
+        const frac = s / subSteps;
+        const ix = prev.hit ? prev.hit.x + dx * frac : hit.x;
+        const iz = prev.hit ? prev.hit.z + dz * frac : hit.z;
+        const interpHit = {
+          x: ix,
+          z: iz,
+          u: ix / (2 * POOL.halfExtent) + 0.5,
+          v: iz / (2 * POOL.halfExtent) + 0.5,
+        };
+        stamp(interpHit, speed * 0.35, `p:${event.pointerId}:${s}`, wakeScale);
+      }
+      let lastSprayAt = prev.lastSprayAt || 0;
+      if (speed > 0.42 && now - lastSprayAt >= 48) {
+        splashes.spawnSweep(hit.x, hit.z, dx, dz, speed, currentSwellTime);
+        lastSprayAt = now;
+      }
+      if (speed > 0.30) audio.playSweep(speed, now);
+      activePointers.set(event.pointerId, { hit, time: now, lastSprayAt });
     }
   }
 });
@@ -346,11 +370,14 @@ function frame(now) {
   currentSwellTime = elapsedSeconds * SWELL_TIME_SCALE;
   const aspect = canvas.width / canvas.height;
 
-  // Visible falling raindrops, impact splashes, ripples & raindrop sound effects
+  // Visible falling raindrops, impact splashes, ripples & raindrop/thunder sound effects
   const rainFrame = rain.step(dt, now, CAMERA, aspect, POOL, currentSwellTime);
   for (const rainDrop of rainFrame.drops) {
     queueDrop(rainDrop.key, rainDrop);
     audio.playRainDrop(rainDrop.intensity || 0.7, now);
+  }
+  if (rainFrame.thunder) {
+    audio.playThunder(rainFrame.thunder.intensity, now);
   }
 
   // Webcam multi-hand gestures (5-finger, palm sweep, plunge/fist splash, 2-hand clap)
@@ -363,10 +390,15 @@ function frame(now) {
     });
     for (const drop of tracked.drops) {
       queueDrop(drop.key, drop);
-      if (drop.kind === 'clap') audio.playClap(now);
-      else if (drop.kind === 'splash') audio.playSplash(1.0, now);
-      else if (drop.kind === 'palm') audio.playSweep(drop.speed || 1.0, now);
-      else if (sample && sample.fresh && drop.kind === 'finger') {
+      if (drop.kind === 'clap') {
+        audio.playClap(now);
+        splashes.spawnBurst(drop.x, drop.z, 1.55, currentSwellTime);
+      } else if (drop.kind === 'splash') {
+        audio.playSplash(1.0, now);
+        splashes.spawnBurst(drop.x, drop.z, 1.15, currentSwellTime);
+      } else if (drop.kind === 'palm') {
+        audio.playSweep(drop.speed || 1.0, now);
+      } else if (sample && sample.fresh && drop.kind === 'finger') {
         audio.playDrop(Math.min(1, 0.45 + (drop.speed || 0) * 0.3), now);
       }
     }
@@ -392,12 +424,15 @@ function frame(now) {
     canvas.height,
     dt,
   );
-  renderer.draw(elapsedSeconds, uiPills);
+  const lightningIntensity = rainFrame.visuals.lightning ? rainFrame.visuals.lightning.intensity : 0;
+  const rainIntensity = rainFrame.visuals.intensity || 0;
+  renderer.draw(elapsedSeconds, uiPills, lightningIntensity, rainIntensity);
 
-  // Project visible floating blossoms onto HUD canvas
+  // Project visible floating blossoms and interactive water splashes onto HUD canvas
+  const mvp = renderer.getMvp();
+  const interactionSplashes = splashes.step(dt, CAMERA, aspect, mvp);
   const projectedFloaters = [];
   if (floaters.isEnabled()) {
-    const mvp = renderer.getMvp();
     for (const item of floaters.list()) {
       const p = projectFloater(item, CAMERA, aspect, cssWidth, cssHeight, currentSwellTime, WAVES, mvp);
       if (p) projectedFloaters.push(p);
@@ -406,6 +441,7 @@ function frame(now) {
   overlay.draw(indicators, now, {
     floaters: projectedFloaters,
     rain: rainFrame.visuals,
+    splashes: interactionSplashes,
     theme: THEMES[currentThemeId],
     occluders: uiPills.cssPills,
   });
