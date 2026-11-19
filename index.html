@@ -19,28 +19,47 @@
       width: 100vw; height: 100vh;
       pointer-events: none; z-index: 2;
     }
-    #gate {
-      position: fixed; inset: 0;
-      display: flex; align-items: center; justify-content: center;
+    .top-bar {
+      position: fixed; top: 14px; left: 14px; right: 14px;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 8px 12px;
+      z-index: 5;
+      pointer-events: none;
       font-family: system-ui, sans-serif;
-      pointer-events: none; z-index: 5;
+    }
+    .toolbar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      pointer-events: auto;
+      font-family: system-ui, sans-serif;
+    }
+    #gate {
+      display: flex; align-items: center;
+      font-family: system-ui, sans-serif;
+      pointer-events: none;
     }
     #gate button {
       background: rgba(4, 24, 64, 0.35); color: var(--ui-text-active);
       border: 1px solid rgba(255,255,255,0.75);
       backdrop-filter: blur(8px);
-      padding: 0.82rem 1.45rem; font-size: 1rem; font-weight: 500;
+      padding: 0.42rem 0.92rem; font-size: 0.8rem; font-weight: 550;
       letter-spacing: 0.01em;
       border-radius: 999px; cursor: pointer;
       pointer-events: auto;
       text-shadow: 0 1px 4px rgba(2, 12, 34, 0.65);
       transition: transform 120ms ease, color 140ms ease;
     }
-    .toolbar {
-      position: fixed; top: 14px; left: 14px;
-      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-      z-index: 4;
-      font-family: system-ui, sans-serif;
+    @media (max-width: 640px) {
+      .top-bar {
+        top: 10px; left: 10px; right: 10px;
+        gap: 6px;
+      }
+      .toolbar {
+        gap: 5px;
+      }
+      .pill, #gate button {
+        padding: 0.32rem 0.64rem;
+        font-size: 0.74rem;
+      }
     }
     .pill {
       background: rgba(6, 26, 66, 0.48);
@@ -130,15 +149,18 @@
   <canvas id="pool"></canvas>
   <canvas id="hud" aria-hidden="true"></canvas>
 
-  <div class="toolbar" role="toolbar" aria-label="Pool controls">
-    <button class="pill active" type="button" data-theme="sunlit" title="Shortcut: 1">Sunlit</button>
-    <button class="pill" type="button" data-theme="sunset" title="Shortcut: 2">Sunset</button>
-    <button class="pill" type="button" data-theme="night" title="Shortcut: 3">Night</button>
-    <button class="pill" type="button" data-theme="biolum" title="Shortcut: 4">Biolum</button>
-    <span class="divider" aria-hidden="true"></span>
-    <button id="rain-toggle" class="pill" type="button" aria-pressed="false" title="Shortcut: R">Rain</button>
-    <button id="petals-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: P">Petals</button>
-    <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: M">Sound</button>
+  <div class="top-bar">
+    <div class="toolbar" role="toolbar" aria-label="Pool controls">
+      <button class="pill active" type="button" data-theme="sunlit" title="Shortcut: 1">Sunlit</button>
+      <button class="pill" type="button" data-theme="sunset" title="Shortcut: 2">Sunset</button>
+      <button class="pill" type="button" data-theme="night" title="Shortcut: 3">Night</button>
+      <button class="pill" type="button" data-theme="biolum" title="Shortcut: 4">Biolum</button>
+      <span class="divider" aria-hidden="true"></span>
+      <button id="rain-toggle" class="pill" type="button" aria-pressed="false" title="Shortcut: R">Rain</button>
+      <button id="petals-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: P">Petals</button>
+      <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: M">Sound</button>
+    </div>
+    <div id="gate"><button id="start" type="button">Use hand gesture</button></div>
   </div>
 
   <div id="cam-controls">
@@ -151,7 +173,6 @@
   </div>
 
   <video id="cam" class="hidden" playsinline autoplay muted></video>
-  <div id="gate"><button id="start" type="button">Touch the water</button></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
