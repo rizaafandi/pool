@@ -145,6 +145,10 @@ export function createFloaters({
       return items;
     },
 
+    bodies() {
+      return items;
+    },
+
     dropPetal(options = {}) {
       return spawnDroppedPetal(options);
     },
@@ -171,7 +175,7 @@ export function createFloaters({
       const worldRadius = Math.max(FLOATERS.pushRadius, radiusUv * 2 * POOL.halfExtent * 3.5);
       const power = Math.abs(strength) * FLOATERS.pushGain;
       for (const item of items) {
-        if (item.falling || item.altitude > 0) continue;
+        if (item.falling || item.altitude > 0 || item.grabbed) continue;
         const dx = item.x - worldX;
         const dz = item.z - worldZ;
         const dist = Math.hypot(dx, dz);
@@ -220,6 +224,12 @@ export function createFloaters({
               size: item.size,
             });
           }
+          continue;
+        }
+
+        if (item.grabbed) {
+          item.spin *= drag;
+          item.angle += item.spin * dt;
           continue;
         }
 
@@ -334,5 +344,6 @@ export function projectFloater(
     shadowY,
     shadowRadiusPx,
     shadowAlpha,
+    grabbed: Boolean(item.grabbed),
   };
 }

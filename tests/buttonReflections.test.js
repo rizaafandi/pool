@@ -12,10 +12,12 @@ function makeElement({
   rect = { left: 20, top: 14, width: 80, height: 28 },
   hovered = false,
   hiddenAncestor = false,
+  dataset = {},
 } = {}) {
   const set = new Set(classes);
   return {
     id,
+    dataset,
     classList: {
       contains: (c) => set.has(c),
       add: (c) => set.add(c),
@@ -110,6 +112,27 @@ describe('createButtonReflectionTracker', () => {
     const out = tracker.collect(many, canvasRect, 1000, 600, 1 / 60);
     expect(out.count).toBe(MAX_UI_PILLS);
     expect(out.cssPills.length).toBe(MAX_UI_PILLS);
+  });
+
+  it('respects custom data-glass-radius and clamps it to half the shortest edge', () => {
+    const tracker = createButtonReflectionTracker();
+    const segmented = makeElement({
+      classes: ['theme-group'],
+      rect: { left: 16, top: 16, width: 320, height: 36 },
+      dataset: { glassRadius: '12' },
+    });
+    const clamped = makeElement({
+      classes: ['pill'],
+      rect: { left: 360, top: 16, width: 80, height: 36 },
+      dataset: { glassRadius: '999' },
+    });
+
+    const out = tracker.collect([segmented, clamped], canvasRect, 1500, 900, 1 / 60);
+    expect(out.count).toBe(2);
+    expect(out.cssPills[0].radius).toBe(12);
+    expect(out.meta[2]).toBeCloseTo(18, 4); // 12 * 1.5 DPR
+    expect(out.cssPills[1].radius).toBe(18); // clamped to height / 2
+    expect(out.meta[6]).toBeCloseTo(27, 4); // 18 * 1.5 DPR
   });
 });
 

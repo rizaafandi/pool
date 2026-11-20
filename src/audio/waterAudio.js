@@ -7,17 +7,26 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
   let ctx = null;
   let noiseBuffer = null;
   let rainNoiseBuffer = null;
+  let sweepNoiseBuffer = null;
   let thunderNoiseBuffer = null;
   let rainSource = null;
   let rainGain = null;
   let sweepSource = null;
-  let sweepFilter = null;
+  let sweepLfo = null;
+  let sweepBodyFilter = null;
+  let sweepBodyGain = null;
+  let sweepMidFilter = null;
+  let sweepMidGain = null;
+  let sweepAirFilter = null;
+  let sweepAirGain = null;
   let sweepGain = null;
+  let sweepPanner = null;
   let rainActive = false;
   let muted = false;
   let lastDropAt = -Infinity;
   let lastRainDropAt = -Infinity;
   let lastSweepAt = -Infinity;
+  let lastWakeBubbleAt = -Infinity;
   let lastSplashAt = -Infinity;
   let lastClapAt = -Infinity;
   let lastThunderAt = -Infinity;
@@ -69,6 +78,38 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
         data[i] = data[i] * w + data[length - fadeSamples + i] * (1 - w);
       }
       rainNoiseBuffer = buffer;
+    }
+
+    if (!sweepNoiseBuffer && c.createBuffer) {
+      // Organic liquid turbulence buffer: rolling brown/pink water current with gentle wet micro-surges
+      const length = Math.max(1, Math.floor(rate * 2.8));
+      const buffer = c.createBuffer(1, length, rate);
+      const data = buffer.getChannelData(0);
+      let brown = 0;
+      let p0 = 0;
+      let p1 = 0;
+      let p2 = 0;
+      let surge = 0.65;
+      let surgeTarget = 0.65;
+      const fadeSamples = Math.min(Math.floor(rate * 0.05), Math.floor(length * 0.1));
+      for (let i = 0; i < length; i++) {
+        const white = Math.random() * 2 - 1;
+        brown = (brown + white * 0.042) * 0.991;
+        p0 = 0.995 * p0 + white * 0.030;
+        p1 = 0.976 * p1 + white * 0.042;
+        p2 = 0.915 * p2 + white * 0.065;
+        if (Math.random() < 0.00055) {
+          surgeTarget = 0.45 + Math.random() * 0.65;
+        }
+        surge += (surgeTarget - surge) * 0.0022;
+        const lapping = 0.78 + 0.22 * Math.sin((i / rate) * 18.5 + brown * 4.5);
+        data[i] = Math.max(-1, Math.min(1, (brown * 1.15 + (p0 + p1 + p2) * 0.46 + white * 0.08) * surge * lapping));
+      }
+      for (let i = 0; i < fadeSamples; i++) {
+        const w = i / Math.max(1, fadeSamples);
+        data[i] = data[i] * w + data[length - fadeSamples + i] * (1 - w);
+      }
+      sweepNoiseBuffer = buffer;
     }
 
     if (!thunderNoiseBuffer && c.createBuffer) {
@@ -151,17 +192,24 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
     }
   }
 
-  function bubbleChirp(c, startTime, baseFreq, endFreq, peakGain, duration) {
+  function bubbleChirp(c, startTime, baseFreq, endFreq, peakGain, duration, pan = 0) {
     const osc = c.createOscillator();
     const gain = c.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(baseFreq, startTime);
     osc.frequency.exponentialRampToValueAtTime(endFreq, startTime + duration);
     gain.gain.setValueAtTime(0.0001, startTime);
-    gain.gain.linearRampToValueAtTime(peakGain, startTime + 0.008);
+    gain.gain.linearRampToValueAtTime(peakGain, startTime + Math.min(0.008, duration * 0.22));
     gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
     osc.connect(gain);
-    gain.connect(c.destination);
+    if (Math.abs(pan) > 0.02 && typeof c.createStereoPanner === 'function') {
+      const panner = c.createStereoPanner();
+      panner.pan.setValueAtTime(Math.max(-0.9, Math.min(0.9, pan)), startTime);
+      gain.connect(panner);
+      panner.connect(c.destination);
+    } else {
+      gain.connect(c.destination);
+    }
     osc.start(startTime);
     osc.stop(startTime + duration + 0.01);
   }
@@ -233,7 +281,7 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
       return rainActive;
     },
 
-    playDrop(intensity = 0.6, nowMs = performance.now()) {
+    playDrop(intensity = 0.6, nowMs = performance.now(), pan = 0) {
       if (muted || nowMs - lastDropAt < 55) return;
       const c = ensureContext();
       if (!c) return;
@@ -241,7 +289,7 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
       const t = c.currentTime;
       const clamped = Math.min(1.5, Math.max(0.15, intensity));
       const base = 290 + Math.random() * 190;
-      bubbleChirp(c, t, base, base * (1.75 + Math.random() * 0.35), 0.055 * clamped, 0.068);
+      bubbleChirp(c, t, base, base * (1.75 + Math.random() * 0.35), 0.055 * clamped, 0.068, pan);
     },
 
     playRainDrop(intensity = 0.7, nowMs = performance.now()) {
@@ -259,57 +307,149 @@ export function createWaterAudio({ AudioContextCtor = getDefaultAudioCtor() } = 
       filteredNoise(c, t, 1850 + Math.random() * 1250, 2.4, 0.026 * amp, 0.036);
     },
 
-    playSweep(speed = 0.8, nowMs = performance.now()) {
-      if (muted || nowMs - lastSweepAt < 35) return;
+    playSweep(speed = 0.8, nowMs = performance.now(), pan = 0) {
+      if (muted || nowMs - lastSweepAt < 32) return;
       const c = ensureContext();
-      if (!c || !rainNoiseBuffer || !c.createBufferSource || !c.createBiquadFilter || !c.createGain) return;
+      const buffer = sweepNoiseBuffer || rainNoiseBuffer;
+      if (!c || !buffer || !c.createBufferSource || !c.createBiquadFilter || !c.createGain) return;
       lastSweepAt = nowMs;
       const t = c.currentTime;
-      const clamped = Math.min(2.2, Math.max(0.15, speed));
+      const clamped = Math.min(2.2, Math.max(0.08, speed));
+      const normSpeed = Math.min(1, clamped / 1.85);
+      const clampedPan = Math.max(-0.88, Math.min(0.88, Number.isFinite(pan) ? pan : 0));
 
       if (!sweepSource) {
         const src = c.createBufferSource();
-        src.buffer = rainNoiseBuffer;
+        src.buffer = buffer;
         src.loop = true;
 
-        const filter = c.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(420, t);
-        filter.Q.setValueAtTime(0.85, t);
+        // Band 1: Warm low-frequency hydrodynamic water slosh / mass displacement
+        const bodyFilter = c.createBiquadFilter();
+        bodyFilter.type = 'lowpass';
+        bodyFilter.frequency.setValueAtTime(210, t);
+        bodyFilter.Q.setValueAtTime(1.15, t);
+        const bodyGain = c.createGain();
+        bodyGain.gain.setValueAtTime(0.65, t);
 
-        const gain = c.createGain();
-        gain.gain.setValueAtTime(0.0001, t);
+        // Band 2: Hollow liquid body formant (gives unmistakable "wet" resonant character)
+        const midFilter = c.createBiquadFilter();
+        midFilter.type = 'bandpass';
+        midFilter.frequency.setValueAtTime(520, t);
+        midFilter.Q.setValueAtTime(2.15, t);
+        const midGain = c.createGain();
+        midGain.gain.setValueAtTime(0.55, t);
 
-        src.connect(filter);
-        filter.connect(gain);
-        gain.connect(c.destination);
+        // Band 3: Crisp aerated surface wake / foam hiss (only blooms on faster sweeps)
+        const airFilter = c.createBiquadFilter();
+        airFilter.type = 'bandpass';
+        airFilter.frequency.setValueAtTime(1850, t);
+        airFilter.Q.setValueAtTime(1.35, t);
+        const airGain = c.createGain();
+        airGain.gain.setValueAtTime(0.0001, t);
+
+        // Gentle organic liquid-lapping LFO modulating mid & body cutoff so water breathes instead of hissing flat
+        if (typeof c.createOscillator === 'function') {
+          const lfo = c.createOscillator();
+          const lfoDepth = c.createGain();
+          lfo.type = 'sine';
+          lfo.frequency.setValueAtTime(4.8, t);
+          lfoDepth.gain.setValueAtTime(85, t);
+          lfo.connect(lfoDepth);
+          lfoDepth.connect(midFilter.frequency);
+          lfo.start(t);
+          sweepLfo = lfo;
+        }
+
+        const masterGain = c.createGain();
+        masterGain.gain.setValueAtTime(0.0001, t);
+
+        src.connect(bodyFilter);
+        bodyFilter.connect(bodyGain);
+        bodyGain.connect(masterGain);
+
+        src.connect(midFilter);
+        midFilter.connect(midGain);
+        midGain.connect(masterGain);
+
+        src.connect(airFilter);
+        airFilter.connect(airGain);
+        airGain.connect(masterGain);
+
+        if (typeof c.createStereoPanner === 'function') {
+          const panner = c.createStereoPanner();
+          panner.pan.setValueAtTime(clampedPan, t);
+          masterGain.connect(panner);
+          panner.connect(c.destination);
+          sweepPanner = panner;
+        } else {
+          masterGain.connect(c.destination);
+        }
+
         src.start(t);
-
         sweepSource = src;
-        sweepFilter = filter;
-        sweepGain = gain;
+        sweepBodyFilter = bodyFilter;
+        sweepBodyGain = bodyGain;
+        sweepMidFilter = midFilter;
+        sweepMidGain = midGain;
+        sweepAirFilter = airFilter;
+        sweepAirGain = airGain;
+        sweepGain = masterGain;
       }
 
-      const targetFreq = 360 + clamped * 340;
-      const targetGain = Math.min(0.11, 0.022 + clamped * 0.042);
+      const rampParam = (param, startFallback, peakVal, restVal, attackSec, releaseSec) => {
+        if (typeof param.cancelScheduledValues === 'function') {
+          param.cancelScheduledValues(t);
+        }
+        const cur = Number.isFinite(param.value) && param.value > 0 ? param.value : startFallback;
+        param.setValueAtTime(cur, t);
+        param.linearRampToValueAtTime(peakVal, t + attackSec);
+        param.linearRampToValueAtTime(restVal, t + releaseSec);
+      };
 
-      if (typeof sweepFilter.frequency.cancelScheduledValues === 'function') {
-        sweepFilter.frequency.cancelScheduledValues(t);
+      // Smoothly follow pointer/hand stereo position across the pool
+      if (sweepPanner && sweepPanner.pan) {
+        if (typeof sweepPanner.pan.cancelScheduledValues === 'function') {
+          sweepPanner.pan.cancelScheduledValues(t);
+        }
+        sweepPanner.pan.setValueAtTime(sweepPanner.pan.value || clampedPan, t);
+        sweepPanner.pan.linearRampToValueAtTime(clampedPan, t + 0.06);
       }
-      sweepFilter.frequency.setValueAtTime(
-        Math.max(120, sweepFilter.frequency.value || targetFreq),
-        t,
-      );
-      sweepFilter.frequency.linearRampToValueAtTime(targetFreq, t + 0.08);
-      sweepFilter.frequency.linearRampToValueAtTime(280, t + 0.34);
 
-      if (typeof sweepGain.gain.cancelScheduledValues === 'function') {
-        sweepGain.gain.cancelScheduledValues(t);
+      // 1. Hydrodynamic slosh body cutoff rises gently with water displacement speed
+      const bodyTargetFreq = 155 + normSpeed * 185;
+      rampParam(sweepBodyFilter.frequency, bodyTargetFreq, bodyTargetFreq, 130, 0.07, 0.42);
+      rampParam(sweepBodyGain.gain, 0.65, 0.58 + normSpeed * 0.45, 0.45, 0.07, 0.40);
+
+      // 2. Liquid cavity formant shifts upward with speed, settling softly as the wake calms
+      const midTargetFreq = 410 + normSpeed * 560 + (Math.random() - 0.5) * 45;
+      rampParam(sweepMidFilter.frequency, midTargetFreq, midTargetFreq, 320, 0.065, 0.38);
+      rampParam(sweepMidGain.gain, 0.55, 0.42 + normSpeed * 0.55, 0.28, 0.065, 0.36);
+
+      // 3. Aerated crest hiss blooms only on brisker sweeps (quadratic speed curve)
+      const airLevel = Math.max(0.0001, normSpeed * normSpeed * 0.62);
+      const airTargetFreq = 1550 + normSpeed * 1650;
+      rampParam(sweepAirFilter.frequency, airTargetFreq, airTargetFreq, 1200, 0.055, 0.28);
+      rampParam(sweepAirGain.gain, 0.0001, airLevel, 0.0001, 0.055, 0.26);
+
+      // Master liquid envelope with smooth attack and trailing settle
+      const targetMaster = Math.min(0.145, 0.018 + Math.pow(normSpeed, 0.85) * 0.115);
+      rampParam(sweepGain.gain, 0.0001, targetMaster, 0.0001, 0.065, 0.38);
+
+      // 4. Stochastic Minnaert wake micro-bubbles (gives unmistakable real liquid gurgle/sparkle)
+      const bubbleIntervalMs = Math.max(58, 155 - normSpeed * 92);
+      if (typeof c.createOscillator === 'function' && nowMs - lastWakeBubbleAt >= bubbleIntervalMs) {
+        lastWakeBubbleAt = nowMs;
+        const bCount = normSpeed > 0.55 && Math.random() < 0.45 ? 2 : 1;
+        for (let b = 0; b < bCount; b++) {
+          const delay = b * (0.018 + Math.random() * 0.025);
+          const baseF = (260 + normSpeed * 540) * (0.78 + Math.random() * 0.58);
+          const endF = baseF * (1.42 + Math.random() * 0.42);
+          const dur = 0.026 + Math.random() * 0.028;
+          const bAmp = (0.009 + normSpeed * 0.024) * (0.65 + Math.random() * 0.45);
+          const bPan = clampedPan + (Math.random() - 0.5) * 0.16;
+          bubbleChirp(c, t + delay, baseF, endF, bAmp, dur, bPan);
+        }
       }
-      const curGain = Math.max(0.0001, sweepGain.gain.value || 0.0001);
-      sweepGain.gain.setValueAtTime(curGain, t);
-      sweepGain.gain.linearRampToValueAtTime(targetGain, t + 0.075);
-      sweepGain.gain.linearRampToValueAtTime(0.0001, t + 0.32);
     },
 
     playSplash(intensity = 1.0, nowMs = performance.now()) {

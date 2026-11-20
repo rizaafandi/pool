@@ -4,92 +4,203 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pool</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
   <style>
     :root {
+      --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+      --ease-ui: cubic-bezier(0.2, 0.8, 0.2, 1);
       --ui-text: rgba(240, 250, 255, 0.94);
+      --ui-text-muted: rgba(224, 244, 255, 0.72);
       --ui-text-active: #ffffff;
       --ui-divider: rgba(185, 238, 255, 0.34);
       --ui-focus: rgba(220, 248, 255, 0.88);
       --ui-cam-border: rgba(185, 238, 255, 0.5);
     }
-    html, body { margin: 0; height: 100%; background: #042033; overflow: hidden; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #042033;
+      overflow: hidden;
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+    }
     #pool { display: block; width: 100vw; height: 100vh; touch-action: none; }
+    #pool.can-grab { cursor: grab; }
+    #pool.is-grabbing { cursor: grabbing; }
     #hud {
       position: fixed; inset: 0;
       width: 100vw; height: 100vh;
       pointer-events: none; z-index: 2;
     }
     .top-bar {
-      position: fixed; top: 14px; left: 14px; right: 14px;
+      position: fixed; top: 16px; left: 16px; right: 16px;
       display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-      gap: 8px 12px;
+      gap: 8px 16px;
       z-index: 5;
       pointer-events: none;
-      font-family: system-ui, sans-serif;
+      transition: opacity 260ms var(--ease-ui), transform 260ms var(--ease-ui);
     }
     .toolbar {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
       pointer-events: auto;
-      font-family: system-ui, sans-serif;
+    }
+    .right-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .seg-sep {
+      width: 1px;
+      height: 16px;
+      background: rgba(255, 255, 255, 0.20);
+      margin: 0 2px;
+      flex-shrink: 0;
+    }
+    .theme-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 36px;
+      padding: 4px;
+      box-sizing: border-box;
+      border-radius: 12px;
+      background: rgba(6, 26, 66, 0.48);
+      border: 1px solid rgba(185, 238, 255, 0.28);
+      backdrop-filter: blur(10px);
+    }
+    .seg-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 28px;
+      padding: 0 12px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--ui-text-muted);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1;
+      letter-spacing: 0;
+      cursor: pointer;
+      text-shadow: 0 1px 3px rgba(2, 12, 34, 0.64);
+      transition: background-color 140ms var(--ease-ui), border-color 140ms var(--ease-ui), color 140ms var(--ease-ui), transform 120ms var(--ease-ui);
+    }
+    .seg-btn:hover {
+      color: var(--ui-text-active);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .seg-btn.active {
+      color: var(--ui-text-active);
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(220, 248, 255, 0.34);
+      text-shadow: 0 1px 4px rgba(2, 12, 34, 0.72);
+    }
+    .action-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
     }
     #gate {
       display: flex; align-items: center;
-      font-family: system-ui, sans-serif;
       pointer-events: none;
     }
     #gate button {
-      background: rgba(4, 24, 64, 0.35); color: var(--ui-text-active);
-      border: 1px solid rgba(255,255,255,0.75);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 36px;
+      padding: 0 16px;
+      box-sizing: border-box;
+      background: rgba(4, 24, 64, 0.42);
+      color: var(--ui-text-active);
+      border: 1px solid rgba(255, 255, 255, 0.64);
       backdrop-filter: blur(8px);
-      padding: 0.42rem 0.92rem; font-size: 0.8rem; font-weight: 550;
-      letter-spacing: 0.01em;
-      border-radius: 999px; cursor: pointer;
-      pointer-events: auto;
-      text-shadow: 0 1px 4px rgba(2, 12, 34, 0.65);
-      transition: transform 120ms ease, color 140ms ease;
-    }
-    @media (max-width: 640px) {
-      .top-bar {
-        top: 10px; left: 10px; right: 10px;
-        gap: 6px;
-      }
-      .toolbar {
-        gap: 5px;
-      }
-      .pill, #gate button {
-        padding: 0.32rem 0.64rem;
-        font-size: 0.74rem;
-      }
-    }
-    .pill {
-      background: rgba(6, 26, 66, 0.48);
-      color: var(--ui-text);
-      border: 1px solid rgba(185, 238, 255, 0.35);
-      backdrop-filter: blur(10px);
-      padding: 0.34rem 0.72rem;
-      font-size: 0.76rem;
+      font-family: var(--font-sans);
+      font-size: 13px;
       font-weight: 500;
-      letter-spacing: 0.01em;
-      font-family: system-ui, sans-serif;
+      line-height: 1;
+      letter-spacing: 0;
       border-radius: 999px;
       cursor: pointer;
-      text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68), 0 0 10px rgba(2, 16, 48, 0.32);
-      transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease;
+      pointer-events: auto;
+      text-shadow: 0 1px 4px rgba(2, 12, 34, 0.68);
+      transition: transform 120ms var(--ease-ui), color 140ms var(--ease-ui), border-color 140ms var(--ease-ui);
     }
-    .pill:hover { background: rgba(12, 42, 96, 0.68); color: #ffffff; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 36px;
+      padding: 0 12px;
+      box-sizing: border-box;
+      background: rgba(6, 26, 66, 0.48);
+      color: var(--ui-text);
+      border: 1px solid rgba(185, 238, 255, 0.32);
+      backdrop-filter: blur(10px);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1;
+      letter-spacing: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68);
+      transition: background-color 140ms var(--ease-ui), border-color 140ms var(--ease-ui), color 140ms var(--ease-ui), transform 120ms var(--ease-ui);
+    }
+    .pill:hover { background: rgba(12, 42, 96, 0.68); color: var(--ui-text-active); }
     .pill.active {
       background: rgba(38, 138, 224, 0.62);
       border-color: rgba(220, 248, 255, 0.85);
       color: var(--ui-text-active);
       text-shadow: 0 1px 4px rgba(2, 12, 34, 0.72);
     }
-    .pill:active, #gate button:active {
+    .seg-btn:active, .pill:active, #gate button:active {
       transform: translateY(1px) scale(0.985);
     }
-    .pill:focus-visible, #gate button:focus-visible {
+    .seg-btn:focus-visible, .pill:focus-visible, #gate button:focus-visible {
       outline: 2px solid var(--ui-focus);
       outline-offset: 2px;
     }
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      box-sizing: border-box;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.08);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      color: inherit;
+      opacity: 0.56;
+      text-shadow: none;
+      transition: opacity 140ms var(--ease-ui), border-color 140ms var(--ease-ui), background-color 140ms var(--ease-ui);
+    }
+    .seg-btn:hover .kbd,
+    .seg-btn.active .kbd,
+    .pill:hover .kbd,
+    .pill.active .kbd {
+      opacity: 0.86;
+      border-color: rgba(255, 255, 255, 0.34);
+      background: rgba(255, 255, 255, 0.14);
+    }
+    body.water-glass-ready .theme-group,
     body.water-glass-ready .pill,
     body.water-glass-ready .pill:hover,
     body.water-glass-ready .pill.active,
@@ -100,29 +211,41 @@
       backdrop-filter: none;
     }
     .divider {
-      width: 1px; height: 16px;
+      width: 1px; height: 20px;
       background: var(--ui-divider);
-      margin: 0 2px;
-      transition: background 240ms ease;
+      margin: 0 4px;
+      transition: background-color 240ms var(--ease-ui);
     }
     #cam-controls {
-      position: fixed; right: 16px; bottom: 144px;
-      display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+      position: fixed; right: 16px; bottom: 148px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
       z-index: 4;
+      transition: opacity 260ms var(--ease-ui), transform 260ms var(--ease-ui);
     }
     #cam-row {
-      display: flex; gap: 5px; align-items: center;
+      display: flex; gap: 8px; align-items: center;
+    }
+    #cam-row .pill {
+      height: 32px;
+      padding: 0 12px;
+      font-size: 12px;
     }
     #gesture-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 28px;
+      padding: 0 12px;
+      box-sizing: border-box;
       background: rgba(6, 26, 66, 0.62);
       color: var(--ui-text);
       border: 1px solid rgba(165, 235, 255, 0.42);
       backdrop-filter: blur(10px);
-      padding: 0.28rem 0.70rem;
-      font-size: 0.74rem;
+      font-family: var(--font-mono);
+      font-size: 11px;
       font-weight: 500;
-      font-family: system-ui, sans-serif;
-      border-radius: 999px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      border-radius: 8px;
       text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68);
       pointer-events: none;
     }
@@ -134,7 +257,7 @@
       box-shadow: 0 8px 24px rgba(2, 18, 56, 0.35);
       transform: scaleX(-1);
       pointer-events: none; z-index: 3;
-      transition: border-color 240ms ease;
+      transition: border-color 240ms var(--ease-ui);
     }
     #cam.unmirrored { transform: scaleX(1); }
     #cam.hidden {
@@ -143,6 +266,97 @@
       opacity: 0; border: 0; box-shadow: none;
     }
     .hidden { display: none !important; }
+    #zen-exit {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 6;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 12px;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(4, 20, 44, 0.44);
+      backdrop-filter: blur(10px);
+      color: var(--ui-text);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      opacity: 0;
+      transform: translateY(-6px);
+      pointer-events: none;
+      transition: opacity 220ms var(--ease-ui), transform 220ms var(--ease-ui), background-color 140ms var(--ease-ui);
+    }
+    #zen-exit:hover {
+      background: rgba(8, 32, 68, 0.64);
+      color: var(--ui-text-active);
+    }
+    body.zen-mode .top-bar {
+      opacity: 0;
+      transform: translateY(-8px);
+      pointer-events: none;
+    }
+    body.zen-mode .top-bar * {
+      pointer-events: none !important;
+    }
+    body.zen-mode #cam-controls,
+    body.zen-mode #cam {
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+    }
+    body.zen-mode.zen-peek #zen-exit,
+    body.zen-mode #zen-exit:hover,
+    body.zen-mode #zen-exit:focus-visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    @media (max-width: 1280px) {
+      .top-bar {
+        gap: 8px 12px;
+      }
+      .toolbar, .action-group, .right-controls {
+        gap: 4px;
+      }
+      .theme-group {
+        height: 32px;
+        padding: 4px;
+        border-radius: 10px;
+      }
+      .seg-btn {
+        height: 24px;
+        padding: 0 8px;
+        font-size: 12px;
+        border-radius: 6px;
+      }
+      .pill, #gate button {
+        height: 32px;
+        padding: 0 12px;
+        font-size: 12px;
+      }
+      .kbd {
+        display: none;
+      }
+    }
+    @media (max-width: 640px) {
+      .top-bar {
+        top: 12px; left: 12px; right: 12px;
+        gap: 8px;
+      }
+      .divider {
+        display: none;
+      }
+    }
+    @media (hover: none) {
+      .kbd {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -151,24 +365,66 @@
 
   <div class="top-bar">
     <div class="toolbar" role="toolbar" aria-label="Pool controls">
-      <button class="pill active" type="button" data-theme="sunlit" title="Shortcut: 1">Sunlit</button>
-      <button class="pill" type="button" data-theme="sunset" title="Shortcut: 2">Sunset</button>
-      <button class="pill" type="button" data-theme="night" title="Shortcut: 3">Night</button>
-      <button class="pill" type="button" data-theme="biolum" title="Shortcut: 4">Biolum</button>
+      <div class="theme-group" role="group" aria-label="Pool lighting" data-glass-radius="12">
+        <button class="seg-btn active" type="button" data-theme="sunlit" aria-pressed="true" title="Sunlit (1)">
+          <span class="btn-label">Sunlit</span><kbd class="kbd" aria-hidden="true">1</kbd>
+        </button>
+        <button class="seg-btn" type="button" data-theme="sunset" aria-pressed="false" title="Sunset (2)">
+          <span class="btn-label">Sunset</span><kbd class="kbd" aria-hidden="true">2</kbd>
+        </button>
+        <button class="seg-btn" type="button" data-theme="night" aria-pressed="false" title="Night (3)">
+          <span class="btn-label">Night</span><kbd class="kbd" aria-hidden="true">3</kbd>
+        </button>
+        <button class="seg-btn" type="button" data-theme="biolum" aria-pressed="false" title="Biolum (4)">
+          <span class="btn-label">Biolum</span><kbd class="kbd" aria-hidden="true">4</kbd>
+        </button>
+        <span class="seg-sep" aria-hidden="true"></span>
+        <button id="cycle-toggle" class="seg-btn" type="button" aria-pressed="false" title="Cycle daylight (T) · Alt+Drag water to aim light">
+          <span class="btn-label">Cycle</span><kbd class="kbd" aria-hidden="true">T</kbd>
+        </button>
+      </div>
       <span class="divider" aria-hidden="true"></span>
-      <button id="rain-toggle" class="pill" type="button" aria-pressed="false" title="Shortcut: R">Rain</button>
-      <button id="petals-toggle" class="pill" type="button" title="Drop a petal (Shortcut: P)">Petal</button>
-      <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" title="Shortcut: M">Sound</button>
+      <div class="action-group" role="group" aria-label="Pool effects">
+        <button id="rain-toggle" class="pill" type="button" aria-pressed="false" data-glass-radius="10" title="Toggle rain (R)">
+          <span class="btn-label">Rain</span><kbd class="kbd" aria-hidden="true">R</kbd>
+        </button>
+        <button id="petals-toggle" class="pill" type="button" data-glass-radius="10" title="Drop a petal (P)">
+          <span class="btn-label">Petal</span><kbd class="kbd" aria-hidden="true">P</kbd>
+        </button>
+        <button id="lantern-toggle" class="pill" type="button" data-glass-radius="10" title="Place a water lantern (L)">
+          <span class="btn-label">Lantern</span><kbd class="kbd" aria-hidden="true">L</kbd>
+        </button>
+        <button id="koi-toggle" class="pill active" type="button" aria-pressed="true" data-glass-radius="10" title="Toggle koi (K)">
+          <span class="btn-label">Koi</span><kbd class="kbd" aria-hidden="true">K</kbd>
+        </button>
+        <button id="bed-toggle" class="pill" type="button" data-glass-radius="10" title="Cycle pool bed: Tiles / Pebbles / Sand (B)">
+          <span class="btn-label">Tiles</span><kbd class="kbd" aria-hidden="true">B</kbd>
+        </button>
+        <button id="water-toggle" class="pill" type="button" data-glass-radius="10" title="Cycle water condition: Calm / Breeze / Storm (W)">
+          <span class="btn-label">Breeze</span><kbd class="kbd" aria-hidden="true">W</kbd>
+        </button>
+        <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" data-glass-radius="10" title="Toggle sound (M)">
+          <span class="btn-label">Sound</span><kbd class="kbd" aria-hidden="true">M</kbd>
+        </button>
+      </div>
     </div>
-    <div id="gate"><button id="start" type="button">Use hand gesture</button></div>
+    <div class="right-controls">
+      <button id="zen-toggle" class="pill" type="button" aria-pressed="false" data-glass-radius="10" title="Zen mode (H)">
+        <span class="btn-label">Zen</span><kbd class="kbd" aria-hidden="true">H</kbd>
+      </button>
+      <div id="gate"><button id="start" type="button">Use hand gesture</button></div>
+    </div>
   </div>
+  <button id="zen-exit" type="button" title="Exit Zen mode (H or Esc)">
+    <span class="btn-label">Exit Zen</span><kbd class="kbd" aria-hidden="true">H</kbd>
+  </button>
 
   <div id="cam-controls">
-    <div id="gesture-badge" class="hidden">Show hand…</div>
+    <div id="gesture-badge" class="hidden" data-glass-radius="8">Show hand…</div>
     <div id="cam-row">
-      <button id="mirror-toggle" class="pill hidden" type="button" aria-pressed="true">Mirror: On</button>
-      <button id="sens-toggle" class="pill hidden" type="button">Splash: Med</button>
-      <button id="cam-toggle" class="pill hidden" type="button" aria-pressed="true">Hide camera</button>
+      <button id="mirror-toggle" class="pill hidden" type="button" aria-pressed="true" data-glass-radius="10">Mirror: On</button>
+      <button id="sens-toggle" class="pill hidden" type="button" data-glass-radius="10">Splash: Med</button>
+      <button id="cam-toggle" class="pill hidden" type="button" aria-pressed="true" data-glass-radius="10">Hide camera</button>
     </div>
   </div>
 

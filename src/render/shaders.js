@@ -82,7 +82,7 @@ vec3 gerstner(vec2 xz, out vec2 horizontal, out float height) {
     if (i >= u_waveCount) break;
     vec2 dir = u_waves[i].xy;
     float wavelength = u_waves[i].z;
-    float steepness = u_waves[i].w;
+    float steepness = u_waves[i].w * u_swellScale;
     float len = length(dir);
     dir = len > 0.0 ? dir / len : vec2(1.0, 0.0);
     float k = 6.28318530718 / wavelength;
@@ -107,6 +107,7 @@ vec3 gerstner(vec2 xz, out vec2 horizontal, out float height) {
 
 const WAVE_UNIFORMS = `
 uniform float u_time;
+uniform float u_swellScale;
 uniform highp int u_waveCount;
 uniform vec4 u_waves[4];
 uniform float u_phases[4];
@@ -269,6 +270,13 @@ uniform float u_biolum;
 uniform float u_nightGlow;
 uniform float u_lightning;
 uniform float u_rain;
+uniform float u_organicScale;
+uniform vec3 u_bedWeights;
+uniform int u_koiCount;
+uniform vec4 u_koiPos[12];
+uniform vec4 u_koiMeta[12];
+uniform int u_lanternCount;
+uniform vec4 u_lanterns[6];
 ${WAVE_UNIFORMS}
 ${GERSTNER_FN}
 ${SIM_SAMPLE_FN}
@@ -304,9 +312,264 @@ vec3 sampleCausticSoft(vec2 uv) {
 
 ${LIQUID_CAUSTIC_FN}
 
-vec3 floorColor(vec2 xz) {
-  vec2 uv = clamp(xz / (2.0 * u_half) + 0.5, 0.0, 1.0);
+float koiNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
 
+vec2 koiLocal(vec2 worldXZ, vec2 centerXZ, float heading, float len, float phase, float bend) {
+  vec2 d = worldXZ - centerXZ;
+  float ch = cos(heading);
+  float sh = sin(heading);
+  vec2 loc = vec2(d.x * ch + d.y * sh, -d.x * sh + d.y * ch) / max(len, 0.05);
+  // Natural S-curve carangiform swimming wave: steady head, fluid tail propulsion
+  float tailT = clamp((0.34 - loc.x) / 1.02, 0.0, 1.0);
+  float wave = sin(loc.x * 8.6 + phase) * (0.005 + 0.118 * tailT * tailT);
+  float curve = bend * (loc.x - 0.18) * (loc.x - 0.18) * 1.45;
+  loc.y -= (wave + curve);
+  return loc;
+}
+
+float koiBodyHalfWidth(float u) {
+  // Sleek natural koi torpedo profile: pointed-oval snout at +0.48, broad shoulders at +0.20, slender peduncle at -0.34
+  if (u >= 0.48 || u <= -0.35) return 0.0;
+  float t = clamp((u + 0.35) / 0.83, 0.0, 1.0);
+  float nose = pow(max(1.0 - t, 0.0), 0.56);
+  float taper = pow(max(t, 0.0), 1.38);
+  float profile = 0.385 * nose * taper;
+  // Keep a slender muscular peduncle just ahead of the tail fin
+  float peduncle = 0.020 * smoothstep(-0.35, -0.28, u) * smoothstep(0.05, -0.25, u);
+  return max(profile, peduncle);
+}
+
+float koiFloorShadow(vec2 floorXZ) {
+  if (u_koiCount <= 0) return 0.0;
+  float shadow = 0.0;
+  float sunY = max(u_sunDir.y, 0.32);
+  for (int i = 0; i < 12; i++) {
+    if (i >= u_koiCount) break;
+    vec4 kp = u_koiPos[i];
+    vec4 km = u_koiMeta[i];
+    float hAboveFloor = max(0.02, kp.y - u_floorY);
+    vec2 sCenter = kp.xz - u_sunDir.xz * (hAboveFloor / sunY);
+    vec2 delta = floorXZ - sCenter;
+    float maxR = km.x * 0.84;
+    if (dot(delta, delta) > maxR * maxR) continue;
+    vec2 loc = koiLocal(floorXZ, sCenter, kp.w, km.x, km.y, km.z);
+    float blur = 0.038 + hAboveFloor * 0.20;
+    float hw = koiBodyHalfWidth(loc.x);
+    float inLen = smoothstep(-0.66 - blur, -0.34, loc.x) * smoothstep(0.49 + blur, 0.36, loc.x);
+    float tailW = mix(hw, 0.145, smoothstep(-0.28, -0.58, loc.x));
+    float bodyM = smoothstep(tailW + blur, tailW - blur * 0.45, abs(loc.y)) * inLen;
+    float depthFade = clamp(1.0 - hAboveFloor * 1.10, 0.42, 0.94);
+    shadow = max(shadow, bodyM * 0.52 * depthFade);
+  }
+  return shadow;
+}
+
+vec4 sampleKoi(vec2 worldXZ, vec4 kp, vec4 km, vec3 sunWebRgb, vec3 prismCaustic) {
+  vec2 delta = worldXZ - kp.xz;
+  float maxR = km.x * 0.86;
+  if (dot(delta, delta) > maxR * maxR) return vec4(0.0);
+
+  vec2 loc = koiLocal(worldXZ, kp.xz, kp.w, km.x, km.y, km.z);
+  float u = loc.x;
+  float v = loc.y;
+  float av = abs(v);
+
+  // Smooth sleek torpedo body silhouette
+  float hw = koiBodyHalfWidth(u);
+  float bodyDist = av - hw;
+  float bodyAlpha = smoothstep(0.0085, -0.0065, bodyDist)
+    * smoothstep(0.482, 0.455, u)
+    * smoothstep(-0.352, -0.315, u);
+
+  // Seamlessly attached wide fan-shaped pectoral fins emerging from behind the gill cover
+  float finRow = sin(km.y * 0.55) * 0.018;
+  float pecU = u - (0.20 - av * 0.52 + finRow * 0.5);
+  float pecV = av - (hw * 0.62 + 0.095);
+  vec2 pecEll = vec2(pecU / 0.125, pecV / 0.115);
+  float pecR = length(pecEll);
+  float pecAngle = atan(av - hw * 0.45, max(0.01, 0.29 - u));
+  float pecRays = 0.86 + 0.14 * sin(pecAngle * 28.0);
+  float pecLead = smoothstep(0.18, 0.26, u) * smoothstep(0.31, 0.24, u);
+  float pecAlpha = smoothstep(1.04, 0.54, pecR)
+    * smoothstep(hw * 0.40, hw * 0.82, av)
+    * smoothstep(0.31, 0.22, u)
+    * (mix(0.82, 0.42, clamp(pecR, 0.0, 1.0)) + pecLead * 0.12) * pecRays;
+
+  // Smaller swept pelvic fins tucked mid-body
+  float pelvU = u - (-0.04 - av * 0.46);
+  float pelvV = av - (hw * 0.62 + 0.056);
+  float pelvR = length(vec2(pelvU / 0.078, pelvV / 0.068));
+  float pelvAlpha = smoothstep(1.02, 0.52, pelvR)
+    * smoothstep(hw * 0.45, hw * 0.82, av)
+    * mix(0.68, 0.30, clamp(pelvR, 0.0, 1.0));
+
+  // Long graceful deeply-forked swallowtail caudal fin with fine fin rays
+  float tailT = clamp((-0.29 - u) / 0.38, 0.0, 1.0);
+  float tailHalfW = mix(0.018, 0.198, pow(tailT, 0.74));
+  float lobeNorm = clamp(av / max(tailHalfW, 0.01), 0.0, 1.0);
+  // Swept pointed tips + deep V-notch fork in the center
+  float forkCut = -0.66 + pow(1.0 - lobeNorm, 1.35) * 0.195;
+  float tailIn = smoothstep(-0.27, -0.33, u) * smoothstep(forkCut - 0.012, forkCut + 0.026, u);
+  float tailEdge = smoothstep(tailHalfW + 0.010, tailHalfW - 0.009, av);
+  float tailRays = 0.84 + 0.16 * sin(lobeNorm * 26.0 + tailT * 2.5);
+  float tailAlpha = tailIn * tailEdge * mix(0.86, 0.46, tailT) * tailRays;
+
+  // Delicate barbels (tiny whiskers) near tip of snout
+  float barbD = length(vec2((u - 0.458) * 1.7, av - 0.036));
+  float barbAlpha = smoothstep(0.018, 0.007, barbD) * 0.55;
+
+  // Sculpted dorsal fin ribbon swaying subtly along the spine
+  float dorsalLen = smoothstep(-0.26, -0.15, u) * smoothstep(0.18, 0.06, u);
+  float dorsalWave = sin(u * 10.0 + km.y - 0.4) * 0.012;
+  float dorsalLine = smoothstep(0.014, 0.0025, abs(v - dorsalWave)) * dorsalLen;
+  float dorsalSideShadow = smoothstep(0.030, 0.004, abs(v - dorsalWave - 0.012)) * dorsalLen;
+
+  float finAlpha = max(max(pecAlpha, pelvAlpha), max(tailAlpha, barbAlpha));
+  float totalAlpha = clamp(max(bodyAlpha, finAlpha), 0.0, 1.0);
+  if (totalAlpha < 0.005) return vec4(0.0);
+
+  // All koi pigments in TRUE LINEAR LIGHT SPACE (WATER_FS applies filmic curve + gamma 1/2.15)
+  float variant = floor(km.w + 0.001);
+  float seed = fract(km.w) * 19.7;
+  vec2 nCoord = vec2(u * 4.2 + seed, v * 5.2 - seed * 0.65);
+  float patchA = koiNoise(nCoord) * 0.68 + koiNoise(nCoord * 2.15 + 3.1) * 0.32;
+  float patchB = koiNoise(nCoord * 1.65 + vec2(6.7, -3.9)) * 0.72 + koiNoise(nCoord * 3.1 - 2.2) * 0.28;
+
+  vec3 pureWhite = vec3(0.84, 0.87, 0.90);
+  vec3 orangeRed = vec3(0.92, 0.125, 0.008);
+  vec3 orangeDeep = vec3(0.76, 0.075, 0.004);
+  vec3 butterGold = vec3(0.74, 0.54, 0.060);
+  vec3 goldBright = vec3(0.94, 0.78, 0.145);
+  vec3 sumiBlack = vec3(0.009, 0.012, 0.017);
+
+  vec3 albedo = pureWhite;
+  vec3 finCol = vec3(0.82, 0.87, 0.91);
+  vec3 dorsalCol = vec3(0.45, 0.52, 0.58);
+
+  if (variant < 0.5) {
+    // 0: Platinum Ogon (pure porcelain white)
+    albedo = pureWhite;
+    finCol = vec3(0.84, 0.89, 0.93);
+    dorsalCol = vec3(0.42, 0.49, 0.56);
+  } else if (variant < 1.5) {
+    // 1: Kohaku (crisp snowy white + vibrant orange-red dorsal saddles)
+    float hi = smoothstep(0.44, 0.485, patchA) * smoothstep(-0.32, -0.18, u);
+    vec3 hiCol = mix(orangeDeep, orangeRed, smoothstep(0.48, 0.70, patchA));
+    albedo = mix(pureWhite, hiCol, hi);
+    finCol = vec3(0.82, 0.87, 0.91);
+    dorsalCol = mix(vec3(0.46, 0.52, 0.58), vec3(0.54, 0.04, 0.005), hi);
+  } else if (variant < 2.5) {
+    // 2: Yamabuki Ogon (rich golden-yellow with warm metallic sheen & translucent gold fins)
+    float sheen = smoothstep(0.28, 0.76, patchA);
+    albedo = mix(butterGold, goldBright, sheen * 0.52 + (1.0 - clamp(av / max(hw, 0.02), 0.0, 1.0)) * 0.34);
+    finCol = vec3(0.82, 0.68, 0.14);
+    dorsalCol = vec3(0.32, 0.24, 0.03);
+  } else {
+    // 3: Showa / Hi Utsuri (vivid orange-red + deep velvety sumi-black bands + crisp white accents)
+    float blackPatch = smoothstep(0.50, 0.545, patchB) * smoothstep(-0.28, -0.12, u);
+    float whiteEdge = smoothstep(0.65, 0.70, patchA) * (1.0 - blackPatch) * smoothstep(0.26, -0.14, u);
+    vec3 hiCol = mix(orangeDeep, orangeRed, 0.65);
+    albedo = mix(hiCol, pureWhite, whiteEdge * 0.94);
+    albedo = mix(albedo, sumiBlack, blackPatch * 0.97);
+    finCol = vec3(0.82, 0.87, 0.91);
+    dorsalCol = vec3(0.025, 0.030, 0.038);
+  }
+
+  // Subtle diamond scale lattice across the torso (stops cleanly before head)
+  float torsoMask = smoothstep(0.24, 0.16, u) * smoothstep(-0.30, -0.18, u);
+  vec2 sc = vec2(u * 46.0, v * 58.0);
+  float scaleGrid = sin(sc.x + sc.y) * sin(sc.x - sc.y);
+  albedo *= 1.0 + scaleGrid * 0.055 * torsoMask;
+
+  // Subtle curved gill-cover (operculum) crease separating head from torso
+  float gillArc = abs((u - 0.24) + av * av * 1.8);
+  float gillShade = smoothstep(0.016, 0.003, gillArc) * smoothstep(0.02, 0.07, av) * bodyAlpha;
+  albedo *= (1.0 - gillShade * 0.24);
+
+  // Recessed glossy jet-black eyes with tiny white specular catchlight
+  vec2 eyeDelta = vec2(u - 0.365, av - (hw * 0.78));
+  float eyeMask = smoothstep(0.021, 0.010, length(eyeDelta)) * bodyAlpha;
+  float eyeGlint = smoothstep(0.007, 0.002, length(eyeDelta - vec2(0.005, -0.004))) * eyeMask;
+  albedo = mix(albedo, vec3(0.003, 0.004, 0.006), eyeMask);
+
+  // Rich 3D cylindrical dorsal normal shading + wet specular sheen
+  float flank = clamp(v / max(hw, 0.015), -1.0, 1.0);
+  float dorsalZ = sqrt(max(0.06, 1.0 - flank * flank * 0.92));
+  float ch = cos(kp.w);
+  float sh = sin(kp.w);
+  vec3 fishN = normalize(vec3(-sh * flank * 0.78, dorsalZ, ch * flank * 0.78));
+  vec3 sunL = normalize(u_sunDir);
+  float ndl = max(dot(fishN, sunL), 0.0);
+  // Crisp flank roll-off gives convincing round 3D volume from top-down view
+  float edgeAO = mix(0.48, 1.0, pow(dorsalZ, 0.55));
+  float diffuse = mix(0.32, 1.12, ndl) * edgeAO;
+  vec3 wetH = normalize(sunL + vec3(0.0, 0.92, 0.38));
+  float wetSpec = pow(max(dot(fishN, wetH), 0.0), 42.0) * 0.28 * bodyAlpha;
+
+  float nightFactor = clamp(u_nightGlow * (1.0 - u_biolum * 0.65), 0.0, 1.0);
+  float moonAmbient = mix(1.0, 0.18, nightFactor);
+  float rainDim = 1.0 - u_rain * 0.25;
+  vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.50);
+  vec3 moodTint = mix(vec3(1.0), u_sunColor, 0.24 + nightFactor * 0.28);
+
+  vec3 bodyLit = albedo * diffuse * moodTint * moonAmbient;
+  bodyLit += u_sunColor * (wetSpec + eyeGlint * 0.55) * (1.0 - u_rain * 0.5) * mix(1.0, 0.35, nightFactor);
+
+  // Sculpted dorsal fin ridge + soft cast shadow onto the back
+  bodyLit = mix(bodyLit, bodyLit * 0.58, dorsalSideShadow * 0.55 * bodyAlpha);
+  bodyLit = mix(bodyLit, dorsalCol * (0.65 + 0.45 * ndl) * moonAmbient, dorsalLine * 0.78 * bodyAlpha);
+
+  // Dancing underwater caustic filaments draped across the koi's curved back
+  float causticNight = mix(1.0, 0.15, nightFactor);
+  bodyLit += sunlitCaustic * sunWebRgb * (0.24 * rainDim * causticNight) * (0.40 + 0.60 * ndl) * dorsalZ;
+  bodyLit += prismCaustic * (0.16 * causticNight) * dorsalZ;
+
+  // Warm golden candlelight illuminating koi when swimming near floating water lanterns
+  if (u_lanternCount > 0) {
+    vec3 lanternLight = vec3(1.0, 0.52, 0.12);
+    float lnBoost = 0.55 + 1.35 * max(nightFactor, u_biolum);
+    for (int i = 0; i < 6; i++) {
+      if (i >= u_lanternCount) break;
+      vec4 ln = u_lanterns[i];
+      vec2 d = worldXZ - ln.xy;
+      float d2 = dot(d, d);
+      float kGlow = exp(-d2 * 5.2) * ln.z * lnBoost;
+      bodyLit += albedo * lanternLight * kGlow * (0.65 + 0.35 * dorsalZ);
+    }
+  }
+
+  if (u_biolum > 0.01) {
+    vec3 bioGlow = mix(u_causticTint, vec3(0.55, 0.95, 1.0), 0.35);
+    bodyLit += bioGlow * u_biolum * (0.12 + dorsalLine * 0.28 + (1.0 - bodyAlpha) * 0.24);
+  }
+
+  vec3 finLit = finCol * (0.62 + 0.42 * ndl) * moodTint * moonAmbient + sunlitCaustic * sunWebRgb * (0.14 * causticNight);
+  if (u_lanternCount > 0) {
+    vec3 lanternFin = vec3(1.0, 0.58, 0.16);
+    float lnBoost = 0.50 + 1.15 * max(nightFactor, u_biolum);
+    for (int i = 0; i < 6; i++) {
+      if (i >= u_lanternCount) break;
+      vec4 ln = u_lanterns[i];
+      vec2 d = worldXZ - ln.xy;
+      float kGlow = exp(-dot(d, d) * 5.2) * ln.z * lnBoost;
+      finLit += finCol * lanternFin * kGlow * 0.72;
+    }
+  }
+  vec3 finalCol = mix(finLit, bodyLit, bodyAlpha);
+
+  return vec4(finalCol, totalAlpha);
+}
+
+vec3 tilesAlbedo(vec2 xz) {
   // Crisp refracted swimming-pool ceramic mosaic tiles
   vec2 tileCoord = xz * 3.6;
   vec2 tileId = floor(tileCoord);
@@ -322,11 +585,115 @@ vec3 floorColor(vec2 xz) {
   vec3 tileCol = mix(u_tileDark, u_tileMid, tileVar);
   tileCol = mix(tileCol, u_tileBright, smoothstep(0.52, 0.94, tileVar2) * 0.58);
   float bevel = smoothstep(0.02, 0.14, min(edge.x, edge.y));
-  // Subtle ceramic glaze variation across each tile face
   float glaze = 0.96 + 0.08 * sin(tileF.x * 3.14159) * sin(tileF.y * 3.14159);
   tileCol *= mix(0.84, 1.04, bevel) * glaze;
+  return mix(u_groutCol, tileCol, tileMask);
+}
 
-  vec3 floorAlbedo = mix(u_groutCol, tileCol, tileMask);
+vec3 pebblesAlbedo(vec2 xz) {
+  // Smooth wet river cobblestones via Voronoi cellular tessellation with rounded dome shading
+  vec2 p = xz * 5.8;
+  vec2 ip = floor(p);
+  vec2 fp = fract(p);
+
+  float d1 = 8.0;
+  float d2 = 8.0;
+  vec2 bestOff = vec2(0.0);
+  vec2 bestId = vec2(0.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 id = ip + g;
+      vec2 rnd = vec2(hash21(id), hash21(id + vec2(37.2, 17.9)));
+      vec2 center = g + 0.14 + 0.72 * rnd;
+      vec2 diff = center - fp;
+      // Gently elongated natural oval stones
+      float ang = rnd.x * 6.28318;
+      float ca = cos(ang);
+      float sa = sin(ang);
+      vec2 rotD = vec2(diff.x * ca + diff.y * sa, (-diff.x * sa + diff.y * ca) * 1.24);
+      float dist = length(rotD);
+      if (dist < d1) {
+        d2 = d1;
+        d1 = dist;
+        bestOff = diff;
+        bestId = id;
+      } else if (dist < d2) {
+        d2 = dist;
+      }
+    }
+  }
+
+  float seam = d2 - d1;
+  float stoneMask = smoothstep(0.055, 0.145, seam);
+  float dome = clamp(1.0 - d1 * 1.55, 0.0, 1.0);
+  vec3 stoneN = normalize(vec3(-bestOff.x * 2.4, 0.48 + dome * 0.78, -bestOff.y * 2.4));
+  float ndl = max(dot(stoneN, normalize(u_sunDir)), 0.0);
+
+  float v1 = hash21(bestId + 3.7);
+  float v2 = hash21(bestId + 51.4);
+  // Natural wet river-bed mineral palette in true linear space (deep slate, basalt, river ochre, smooth quartz)
+  vec3 slate = vec3(0.022, 0.048, 0.072);
+  vec3 warmGrey = vec3(0.072, 0.078, 0.072);
+  vec3 riverOchre = vec3(0.145, 0.088, 0.042);
+  vec3 quartz = vec3(0.20, 0.21, 0.20);
+  vec3 stoneBase = mix(slate, warmGrey, smoothstep(0.10, 0.55, v1));
+  stoneBase = mix(stoneBase, riverOchre, smoothstep(0.55, 0.85, v1) * 0.78);
+  stoneBase = mix(stoneBase, quartz, smoothstep(0.84, 0.98, v2) * 0.70);
+  float speckle = koiNoise(xz * 34.0 + bestId * 2.1);
+  stoneBase *= (0.82 + 0.34 * speckle);
+
+  // Adapt harmoniously to sunset / night / biolum mood so Night stays deep dark & Sunset glows warm orange
+  vec3 themeTint = mix(vec3(1.0), clamp(u_tileBright * 1.9 + 0.14, 0.10, 1.25), 0.52);
+  float sunsetBias = clamp((u_sunColor.r - u_sunColor.b) * 1.15, 0.0, 0.75);
+  themeTint = mix(themeTint, vec3(1.18, 0.62, 0.26), sunsetBias * 0.45);
+  float nightDim = mix(1.0, 0.14, clamp(u_nightGlow * (1.0 - u_biolum * 0.6), 0.0, 1.0)) * mix(1.0, 0.22, u_biolum);
+  vec3 gravelCrevice = vec3(0.005, 0.009, 0.016) * themeTint * nightDim;
+  vec3 litStone = stoneBase * themeTint * mix(0.36, 1.22, ndl) * (0.64 + 0.44 * dome) * nightDim;
+  return mix(gravelCrevice, litStone, stoneMask);
+}
+
+vec3 sandAlbedo(vec2 xz) {
+  // Organic underwater coastal sand ripples with sunlit crests, shaded troughs & fine quartz grain
+  vec2 warp = vec2(
+    koiNoise(xz * 1.9 + vec2(2.3, 1.1)),
+    koiNoise(xz * 2.1 - vec2(4.7, 3.2))
+  ) * 0.55;
+  vec2 p = xz + warp * 0.32;
+  float ripplePhase = p.x * 13.5 + p.y * 5.2 + sin(p.y * 3.4 - p.x * 1.8) * 1.3;
+  float ripple = 0.5 + 0.5 * sin(ripplePhase);
+  float rippleSlope = cos(ripplePhase);
+  float microRipple = 0.5 + 0.5 * sin(p.x * 29.0 - p.y * 11.0 + warp.x * 4.0);
+
+  vec3 sandN = normalize(vec3(-rippleSlope * 0.38, 1.0, -rippleSlope * 0.16));
+  float ndl = max(dot(sandN, normalize(u_sunDir)), 0.0);
+
+  float grain = hash21(floor(xz * 120.0));
+  float grainSoft = koiNoise(xz * 22.0);
+  // Warm sunlit coastal sand in linear space, shifting toward deep dark moonlit seabed at night
+  vec3 warmSand = vec3(0.38, 0.30, 0.16);
+  vec3 coolSand = vec3(0.006, 0.016, 0.036);
+  vec3 bioSand = vec3(0.006, 0.022, 0.052);
+  vec3 sandBase = mix(warmSand, coolSand, clamp(u_nightGlow * 0.96, 0.0, 1.0));
+  sandBase = mix(sandBase, bioSand, u_biolum * 0.90);
+  float sunsetBias = clamp((u_sunColor.r - u_sunColor.b) * 1.15, 0.0, 0.78);
+  sandBase = mix(sandBase, vec3(0.46, 0.19, 0.055), sunsetBias * 0.72);
+
+  vec3 troughCol = sandBase * 0.58;
+  vec3 crestCol = sandBase * 1.18;
+  vec3 col = mix(troughCol, crestCol, smoothstep(0.12, 0.88, ripple * 0.82 + microRipple * 0.18));
+  col *= mix(0.72, 1.22, ndl);
+  col *= (0.92 + 0.12 * grainSoft + 0.06 * grain);
+  return col;
+}
+
+vec3 floorColor(vec2 xz) {
+  vec2 uv = clamp(xz / (2.0 * u_half) + 0.5, 0.0, 1.0);
+
+  vec3 floorAlbedo = vec3(0.0);
+  if (u_bedWeights.x > 0.002) floorAlbedo += tilesAlbedo(xz) * u_bedWeights.x;
+  if (u_bedWeights.y > 0.002) floorAlbedo += pebblesAlbedo(xz) * u_bedWeights.y;
+  if (u_bedWeights.z > 0.002) floorAlbedo += sandAlbedo(xz) * u_bedWeights.z;
 
   // Combine crisp chromatic sunlit caustic filaments + interactive touch caustic
   vec3 simCaustic = clamp(sampleCausticSoft(uv), 0.0, 1.0);
@@ -339,13 +706,33 @@ vec3 floorColor(vec2 xz) {
   );
   float rainDim = 1.0 - u_rain * 0.30;
 
-  // Directional sunlight illumination + optional underwater night pool lamp glow
+  // Directional sunlight illumination; Night mode drops into deep quiet moonlight so lanterns become the main glow
+  float nightFactor = clamp(u_nightGlow * (1.0 - u_biolum * 0.65), 0.0, 1.0);
   float sunPoolGrad = clamp(0.84 + 0.22 * (xz.x * 0.35 - xz.y * 0.45), 0.68, 1.22);
-  float lampPool = exp(-dot(xz, xz) * 0.65);
-  float lampBoost = 1.0 + u_nightGlow * lampPool * 1.15;
+  float moonPool = 0.65 + 0.35 * exp(-dot(xz, xz) * 0.55);
+  float floorLight = mix(0.76 * sunPoolGrad, 0.52 * moonPool, nightFactor);
+  float causticScale = mix(1.0, 0.12, nightFactor);
   vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.46);
-  vec3 col = floorAlbedo * (0.76 * sunPoolGrad * lampBoost);
-  col += (sunlitCaustic * sunWebRgb * ((0.52 - u_biolum * 0.34) * rainDim) + mix(prismCaustic, sunlitCaustic * prismCaustic, 0.45)) * sunPoolGrad * lampBoost;
+  float koiShadow = koiFloorShadow(xz);
+  vec3 col = floorAlbedo * (floorLight * (1.0 - koiShadow));
+  col += (sunlitCaustic * sunWebRgb * ((0.52 - u_biolum * 0.34) * rainDim) + mix(prismCaustic, sunlitCaustic * prismCaustic, 0.45)) * sunPoolGrad * causticScale * (1.0 - koiShadow * 0.65);
+
+  // Warm underwater glow cast downward onto the pool floor beneath floating water lanterns
+  if (u_lanternCount > 0) {
+    vec3 lanternWarm = vec3(1.0, 0.34, 0.04);
+    vec3 lanternCore = vec3(1.0, 0.62, 0.14);
+    float nightFactorLn = 0.35 + 0.92 * max(nightFactor, u_biolum);
+    for (int i = 0; i < 6; i++) {
+      if (i >= u_lanternCount) break;
+      vec4 ln = u_lanterns[i];
+      vec2 d = xz - ln.xy;
+      float d2 = dot(d, d);
+      float wideGlow = exp(-d2 * 5.2) * ln.z * nightFactorLn;
+      float coreGlow = exp(-d2 * 18.0) * ln.z * nightFactorLn;
+      vec3 litBase = max(floorAlbedo * 1.25, vec3(0.042, 0.020, 0.007));
+      col += litBase * (lanternWarm * wideGlow * 0.85 + lanternCore * coreGlow * 0.48);
+    }
+  }
   return col;
 }
 
@@ -354,19 +741,20 @@ vec3 envColor(vec3 r) {
   vec3 L = normalize(u_sunDir);
   // Clean natural sky dome gradient without milky artificial specular bands
   float elev = clamp(d.y * 0.85 + 0.15, 0.0, 1.0);
-  vec3 horizon = mix(u_skyBright, u_sunColor, 0.14 * (1.0 - u_biolum));
+  vec3 horizon = mix(u_skyBright, u_sunColor, 0.22 * (1.0 - u_biolum));
   vec3 zenith = mix(u_skyDeep, u_skyMid, 0.45);
   vec3 col = mix(horizon, u_skyMid, smoothstep(0.0, 0.52, elev));
   col = mix(col, zenith, smoothstep(0.45, 0.96, elev));
 
-  // Crisp sun / moon reflection disc + natural atmospheric scatter
+  // Crisp sun / moon reflection disc scaled naturally by u_sunIntensity
   float sunDot = max(dot(d, L), 0.0);
   float sunHalo = pow(sunDot, 16.0);
   float sunCore = pow(sunDot, 180.0);
   float clearSky = 1.0 - u_rain * 0.72;
-  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.38 * (1.0 - u_biolum * 0.7) * clearSky);
-  col += u_sunColor * sunCore * (2.6 * (1.0 - u_biolum * 0.65) * clearSky);
-  vec3 stormSky = mix(u_skyDeep, vec3(0.32, 0.42, 0.54), 0.48);
+  float skyDiscScale = clamp(u_sunIntensity * 0.62, 0.08, 1.15);
+  col += mix(u_skyBright, u_sunColor, 0.55) * sunHalo * (0.38 * skyDiscScale * (1.0 - u_biolum * 0.7) * clearSky);
+  col += u_sunColor * sunCore * (2.4 * skyDiscScale * (1.0 - u_biolum * 0.65) * clearSky);
+  vec3 stormSky = mix(u_skyDeep, vec3(0.32, 0.42, 0.54) * skyDiscScale, 0.48);
   col = mix(col, stormSky, u_rain * 0.38);
   return col;
 }
@@ -384,7 +772,7 @@ void main() {
 
   vec2 simSlope = simGrad * 3.8;
   vec2 swellSlope = vec2(-swellNormal.x / swellNormal.y, -swellNormal.z / swellNormal.y) * 0.16;
-  vec2 organicSlope = liquidSlope(v_world.xz, u_time);
+  vec2 organicSlope = liquidSlope(v_world.xz, u_time) * u_organicScale;
   vec2 slope = simSlope + swellSlope + organicSlope;
   vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
 
@@ -403,6 +791,43 @@ void main() {
     vec3 hit = v_world + I * t;
     float path = length(hit - v_world);
     through = floorColor(hit.xz) * exp(-u_absorption * path * 1.15);
+
+    if (u_koiCount > 0) {
+      vec3 koiAccum = vec3(0.0);
+      float koiAlpha = 0.0;
+      float bestKoiT = 1e6;
+      for (int i = 0; i < 12; i++) {
+        if (i >= u_koiCount) break;
+        vec4 kp = u_koiPos[i];
+        vec4 km = u_koiMeta[i];
+        float tk = (kp.y - v_world.y) / I.y;
+        if (tk <= 0.0 || tk >= t) continue;
+        vec3 khit = v_world + I * tk;
+        vec2 kDelta = khit.xz - kp.xz;
+        float kMaxR = km.x * 0.86;
+        if (dot(kDelta, kDelta) > kMaxR * kMaxR) continue;
+        vec2 kuv = clamp(khit.xz / (2.0 * u_half) + 0.5, 0.0, 1.0);
+        vec3 kSimCaustic = clamp(sampleCausticSoft(kuv), 0.0, 1.0);
+        vec3 kPrism = pow(kSimCaustic, vec3(1.35)) * 0.45;
+        vec2 kDisp = vec2(0.005, -0.003);
+        vec3 kSunWeb = vec3(
+          causticWeb(khit.xz + kDisp, u_time),
+          causticWeb(khit.xz, u_time),
+          causticWeb(khit.xz - kDisp, u_time)
+        );
+        vec4 kSample = sampleKoi(khit.xz, kp, km, kSunWeb, kPrism);
+        if (kSample.a > 0.005 && tk < bestKoiT) {
+          float kPath = length(khit - v_world);
+          vec3 kAtten = kSample.rgb * exp(-u_absorption * kPath * 0.72);
+          koiAccum = mix(koiAccum, kAtten, kSample.a);
+          koiAlpha = max(koiAlpha, kSample.a);
+          bestKoiT = tk;
+        }
+      }
+      if (koiAlpha > 0.005) {
+        through = mix(through, koiAccum, koiAlpha);
+      }
+    }
   } else {
     through = u_skyDeep;
   }
@@ -427,6 +852,32 @@ void main() {
   col += mix(u_causticTint, u_sunColor, 0.55) * shafts * u_shaftStrength * (1.0 - u_rain * 0.75);
   col += mix(u_causticTint, u_sunColor, 0.55) * (specSun * 0.11 + splash * specSun * 0.32) * rainSunScale;
   col += u_sunColor * (specSparkle * (2.1 + splash * 1.4) + rippleEdge * specSparkle * 1.2) * u_sunIntensity * rainSunScale;
+
+  // Shimmering warm amber reflections from floating water lanterns across passing ripples
+  if (u_lanternCount > 0) {
+    vec3 flameCol = vec3(1.0, 0.36, 0.045);
+    vec3 flameCore = vec3(1.0, 0.70, 0.18);
+    float nightBoost = 0.36 + 0.72 * max(u_nightGlow, max(u_biolum, clamp(1.45 - u_sunIntensity * 0.55, 0.0, 1.0)));
+    for (int i = 0; i < 6; i++) {
+      if (i >= u_lanternCount) break;
+      vec4 ln = u_lanterns[i];
+      vec3 lightPos = vec3(ln.x, 0.095, ln.y);
+      vec3 toLight = lightPos - v_world;
+      float dist2 = dot(toLight.xz, toLight.xz);
+      if (dist2 > 1.55) continue;
+      vec3 lDir = normalize(toLight);
+      vec3 lh = normalize(lDir + V);
+      float ndh = max(dot(N, lh), 0.0);
+      float atten = exp(-dist2 * 3.8) / (1.0 + dist2 * 4.0);
+      float wideShimmer = pow(ndh, 22.0) * 0.52;
+      float tightGlint = pow(ndh, 130.0) * 1.35;
+      // Elongated inverted reflection column toward the viewer distorted by live surface normal N.xz
+      vec2 reflOff = vec2(v_world.x - ln.x + N.x * 0.14, (v_world.z - ln.y - 0.10) * 0.56 + N.z * 0.14);
+      float reflColumn = exp(-dot(reflOff * vec2(8.6, 5.0), reflOff * vec2(8.6, 5.0))) * smoothstep(-0.04, 0.06, v_world.z - ln.y + 0.05);
+      float halo = exp(-dist2 * 11.5) * 0.20;
+      col += (flameCol * (wideShimmer + halo + reflColumn * 0.52) + flameCore * (tightGlint + reflColumn * pow(ndh, 30.0) * 0.52)) * atten * ln.z * nightBoost;
+    }
+  }
 
   // Subtle aerated micro-sparkle on peak wave collisions while keeping water crystal-clear and translucent
   float peakSplash = smoothstep(0.42, 0.74, splash) * smoothstep(0.35, 1.15, length(simSlope));

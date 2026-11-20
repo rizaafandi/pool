@@ -55,6 +55,12 @@ function makeMockAudioContext() {
         stop: (t) => events.push(['noiseStop', t]),
       };
     },
+    createStereoPanner() {
+      return {
+        pan: makeParam(),
+        connect() { return this; },
+      };
+    },
   };
 }
 
@@ -173,5 +179,28 @@ describe('createWaterAudio', () => {
     audio.setMuted(true);
     audio.playThunder(0.9, 9000);
     expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBe(noiseAfter);
+  });
+
+  it('produces layered liquid sweep turbulence, wake micro-bubbles, and stereo panning without restarting noise source', () => {
+    let ctx = null;
+    const Ctor = function MockCtor() {
+      ctx = makeMockAudioContext();
+      return ctx;
+    };
+    const audio = createWaterAudio({ AudioContextCtor: Ctor });
+    audio.unlock();
+
+    audio.playSweep(0.45, 2000, -0.5);
+    const noiseStarts = ctx.events.filter((e) => e[0] === 'noiseStart').length;
+    const oscStartsFirst = ctx.events.filter((e) => e[0] === 'oscStart').length;
+    expect(noiseStarts).toBe(1);
+    // Starts liquid LFO + wake micro-bubble chirp
+    expect(oscStartsFirst).toBeGreaterThanOrEqual(2);
+
+    // Continued faster sweep reuses the single turbulence buffer, updates pan, and adds wake micro-bubbles
+    audio.playSweep(1.5, 2150, 0.6);
+    expect(ctx.events.filter((e) => e[0] === 'noiseStart').length).toBe(1);
+    expect(ctx.events.filter((e) => e[0] === 'oscStart').length).toBeGreaterThan(oscStartsFirst);
+    expect(ctx.events.some((e) => e[0] === 'lin' && Math.abs(e[1] - 0.6) < 1e-4)).toBe(true);
   });
 });

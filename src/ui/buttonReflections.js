@@ -87,7 +87,13 @@ export function createButtonReflectionTracker() {
           continue;
         }
 
-        const cssRadius = Math.min(r.width, r.height) * 0.5;
+        const maxCssRadius = Math.min(r.width, r.height) * 0.5;
+        const customRadius = el.dataset && el.dataset.glassRadius !== undefined
+          ? Number.parseFloat(el.dataset.glassRadius)
+          : NaN;
+        const cssRadius = Number.isFinite(customRadius) && customRadius >= 0
+          ? Math.min(customRadius, maxCssRadius)
+          : maxCssRadius;
         cssPills.push({
           x: localX,
           y: localY,
@@ -100,7 +106,7 @@ export function createButtonReflectionTracker() {
         const cy = canvasHeight - (localY + r.height * 0.5) * scaleY;
         const halfW = r.width * 0.5 * scaleX;
         const halfH = r.height * 0.5 * scaleY;
-        const radius = Math.min(halfW, halfH);
+        const radius = Math.min(cssRadius * Math.min(scaleX, scaleY), halfW, halfH);
 
         const targetActive = el.classList && el.classList.contains('active') ? 1 : 0;
         let targetHover = 0;

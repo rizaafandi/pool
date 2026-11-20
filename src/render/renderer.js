@@ -1,5 +1,5 @@
 import {
-  CAMERA, POOL, SIM, SWELL_TIME_SCALE, THEMES, VIEW, WATER, WAVES,
+  CAMERA, POOL, POOL_BEDS, SIM, SWELL_TIME_SCALE, THEMES, VIEW, WATER, WATER_CONDITIONS, WAVES,
 } from '../config.js';
 import { createGL, makeFloatTarget, program } from '../gl.js';
 import { lookAt, multiply, norm, perspective } from '../math.js';
@@ -15,6 +15,7 @@ function makeSceneTarget(gl, initialWidth, initialHeight) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
   const depth = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
   const fb = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
@@ -97,7 +98,7 @@ function blendTheme(cur, dst, k) {
   cur.nightGlow += (dst.nightGlow - cur.nightGlow) * k;
 }
 
-function uploadWaves(gl, prog) {
+function uploadWaves(gl, prog, swellScale = 1.0) {
   const packed = new Float32Array(16);
   const phases = new Float32Array(4);
   for (let i = 0; i < WAVES.length; i++) {
@@ -107,6 +108,7 @@ function uploadWaves(gl, prog) {
     packed[i * 4 + 3] = WAVES[i].steepness;
     phases[i] = WAVES[i].phase;
   }
+  gl.uniform1f(gl.getUniformLocation(prog, 'u_swellScale'), swellScale);
   gl.uniform1i(gl.getUniformLocation(prog, 'u_waveCount'), WAVES.length);
   gl.uniform4fv(gl.getUniformLocation(prog, 'u_waves'), packed);
   gl.uniform1fv(gl.getUniformLocation(prog, 'u_phases'), phases);
@@ -160,11 +162,49 @@ export function createRenderer(canvas) {
 
   const packedDrops = new Float32Array(SIM.maxDrops * 4);
   let targetTheme = THEMES.sunlit;
+  let customSunDir = null;
   const activeTheme = cloneTheme(targetTheme);
+  let targetBedWeights = POOL_BEDS.tiles.weights.slice();
+  const activeBedWeights = POOL_BEDS.tiles.weights.slice();
+  let activeCondition = WATER_CONDITIONS.breeze;
+  let currentSwellScale = activeCondition.swellAmp;
+  let currentOrganicScale = activeCondition.organicSlope;
 
   return {
-    setTheme(themeId) {
-      if (THEMES[themeId]) targetTheme = THEMES[themeId];
+    setTheme(themeId, immediate = false) {
+      if (THEMES[themeId]) {
+        targetTheme = THEMES[themeId];
+        if (immediate) blendTheme(activeTheme, targetTheme, 1.0);
+      }
+    },
+    setCustomTheme(themeObj) {
+      if (themeObj && Array.isArray(themeObj.sunDir)) {
+        targetTheme = themeObj;
+      }
+    },
+    setCustomSunDir(dir) {
+      customSunDir = Array.isArray(dir) ? norm(dir) : null;
+    },
+    getActiveTheme() {
+      return activeTheme;
+    },
+    setBed(bedId, immediate = false) {
+      if (POOL_BEDS[bedId]) {
+        targetBedWeights = POOL_BEDS[bedId].weights.slice();
+        if (immediate) lerpVec3(activeBedWeights, targetBedWeights, 1.0);
+      }
+    },
+    setWaterCondition(conditionId, immediate = false) {
+      if (WATER_CONDITIONS[conditionId]) {
+        activeCondition = WATER_CONDITIONS[conditionId];
+        if (immediate) {
+          currentSwellScale = activeCondition.swellAmp;
+          currentOrganicScale = activeCondition.organicSlope;
+        }
+      }
+    },
+    getSwellScale() {
+      return currentSwellScale;
     },
     getMvp() {
       return mvp;
@@ -182,8 +222,8 @@ export function createRenderer(canvas) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
       gl.uniform1i(gl.getUniformLocation(updateProg, 'u_state'), 0);
-      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_waveSpeed'), SIM.waveSpeed);
-      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_damping'), SIM.damping);
+      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_waveSpeed'), activeCondition.waveSpeed);
+      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_damping'), activeCondition.damping);
       gl.uniform1f(gl.getUniformLocation(updateProg, 'u_texel'), 1 / SIM.size);
       const list = Array.isArray(drops) ? drops : (drops ? [drops] : []);
       let count = 0;
@@ -205,8 +245,19 @@ export function createRenderer(canvas) {
       read = write;
       write = swap;
     },
-    draw(timeSeconds, uiPills = null, lightning = 0, rainIntensity = 0) {
+    draw(timeSeconds, uiPills = null, lightning = 0, rainIntensity = 0, koiData = null, lanternData = null, swellTimeOverride = null) {
       blendTheme(activeTheme, targetTheme, 0.08);
+      if (customSunDir) {
+        lerpVec3(activeTheme.sunDir, customSunDir, 0.22);
+        const u = norm(activeTheme.sunDir);
+        activeTheme.sunDir[0] = u[0];
+        activeTheme.sunDir[1] = u[1];
+        activeTheme.sunDir[2] = u[2];
+      }
+      lerpVec3(activeBedWeights, targetBedWeights, 0.12);
+      currentSwellScale += (activeCondition.swellAmp - currentSwellScale) * 0.08;
+      currentOrganicScale += (activeCondition.organicSlope - currentOrganicScale) * 0.08;
+      const swellT = swellTimeOverride !== null ? swellTimeOverride : timeSeconds * SWELL_TIME_SCALE;
       sceneTarget.resize(canvas.width, canvas.height);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, caustic.fb);
@@ -226,7 +277,7 @@ export function createRenderer(canvas) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
       gl.uniform1i(gl.getUniformLocation(causticProg, 'u_sim'), 0);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_time'), timeSeconds * SWELL_TIME_SCALE);
+      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_time'), swellT);
       gl.uniform1f(gl.getUniformLocation(causticProg, 'u_half'), POOL.halfExtent);
       gl.uniform1f(gl.getUniformLocation(causticProg, 'u_texel'), 1 / SIM.size);
       gl.uniform1f(gl.getUniformLocation(causticProg, 'u_worldDx'), (2 * POOL.halfExtent) / SIM.size);
@@ -234,7 +285,7 @@ export function createRenderer(canvas) {
       gl.uniform1f(gl.getUniformLocation(causticProg, 'u_ior'), WATER.ior);
       gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_sunDir'), activeTheme.sunDir);
       gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_absorption'), WATER.absorption);
-      uploadWaves(gl, causticProg);
+      uploadWaves(gl, causticProg, currentSwellScale);
       gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
       gl.disable(gl.BLEND);
 
@@ -256,11 +307,11 @@ export function createRenderer(canvas) {
       gl.bindTexture(gl.TEXTURE_2D, caustic.tex);
       gl.uniform1i(gl.getUniformLocation(waterProg, 'u_caustic'), 1);
       gl.uniformMatrix4fv(gl.getUniformLocation(waterProg, 'u_mvp'), false, mvp);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_time'), timeSeconds * SWELL_TIME_SCALE);
+      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_time'), swellT);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_half'), POOL.halfExtent);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_texel'), 1 / SIM.size);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_worldDx'), (2 * POOL.halfExtent) / SIM.size);
-      uploadWaves(gl, waterProg);
+      uploadWaves(gl, waterProg, currentSwellScale);
       gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_camera'), CAMERA.eye);
       gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_sunDir'), activeTheme.sunDir);
       gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_sunColor'), activeTheme.sunColor);
@@ -282,6 +333,19 @@ export function createRenderer(canvas) {
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_nightGlow'), activeTheme.nightGlow);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_lightning'), lightning);
       gl.uniform1f(gl.getUniformLocation(waterProg, 'u_rain'), rainIntensity);
+      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_organicScale'), currentOrganicScale);
+      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_bedWeights'), activeBedWeights);
+      const koiCount = koiData && koiData.count > 0 ? koiData.count : 0;
+      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_koiCount'), koiCount);
+      if (koiCount > 0) {
+        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_koiPos'), koiData.pos);
+        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_koiMeta'), koiData.meta);
+      }
+      const lanternCount = lanternData && lanternData.count > 0 ? lanternData.count : 0;
+      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_lanternCount'), lanternCount);
+      if (lanternCount > 0) {
+        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_lanterns'), lanternData.data);
+      }
       gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
