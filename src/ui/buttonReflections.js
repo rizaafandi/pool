@@ -56,8 +56,42 @@ export function createButtonReflectionTracker() {
   const rects = new Float32Array(MAX_UI_PILLS * 4);
   const meta = new Float32Array(MAX_UI_PILLS * 4);
   const smoothState = new WeakMap();
+  let layoutCache = new WeakMap();
+
+  function readLayout(el) {
+    let cached = layoutCache.get(el);
+    if (cached !== undefined) return cached;
+
+    const r = el.getBoundingClientRect();
+    if (!r || r.width < 2 || r.height < 2) {
+      return null;
+    }
+
+    const maxCssRadius = Math.min(r.width, r.height) * 0.5;
+    const customRadius = el.dataset && el.dataset.glassRadius !== undefined
+      ? Number.parseFloat(el.dataset.glassRadius)
+      : NaN;
+    const cssRadius = Number.isFinite(customRadius) && customRadius >= 0
+      ? Math.min(customRadius, maxCssRadius)
+      : maxCssRadius;
+
+    cached = {
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height,
+      cssRadius,
+      kind: classifyKind(el),
+    };
+    layoutCache.set(el, cached);
+    return cached;
+  }
 
   return {
+    invalidate() {
+      layoutCache = new WeakMap();
+    },
+
     collect(elements, canvasRect, canvasWidth, canvasHeight, dt = 1 / 60) {
       const cssPills = [];
       if (!elements || !canvasRect || canvasRect.width <= 0 || canvasRect.height <= 0) {
@@ -66,15 +100,19 @@ export function createButtonReflectionTracker() {
 
       const scaleX = canvasWidth / canvasRect.width;
       const scaleY = canvasHeight / canvasRect.height;
+      const minScale = Math.min(scaleX, scaleY);
       const blend = 1 - Math.exp(-Math.max(0, dt) * 14);
       let count = 0;
 
       for (const el of elements) {
         if (count >= MAX_UI_PILLS) break;
-        if (isHiddenElement(el) || typeof el.getBoundingClientRect !== 'function') continue;
+        if (isHiddenElement(el) || typeof el.getBoundingClientRect !== 'function') {
+          if (el) layoutCache.delete(el);
+          continue;
+        }
 
-        const r = el.getBoundingClientRect();
-        if (!r || r.width < 2 || r.height < 2) continue;
+        const r = readLayout(el);
+        if (!r) continue;
 
         const localX = r.left - canvasRect.left;
         const localY = r.top - canvasRect.top;
@@ -87,26 +125,19 @@ export function createButtonReflectionTracker() {
           continue;
         }
 
-        const maxCssRadius = Math.min(r.width, r.height) * 0.5;
-        const customRadius = el.dataset && el.dataset.glassRadius !== undefined
-          ? Number.parseFloat(el.dataset.glassRadius)
-          : NaN;
-        const cssRadius = Number.isFinite(customRadius) && customRadius >= 0
-          ? Math.min(customRadius, maxCssRadius)
-          : maxCssRadius;
         cssPills.push({
           x: localX,
           y: localY,
           width: r.width,
           height: r.height,
-          radius: cssRadius,
+          radius: r.cssRadius,
         });
 
         const cx = (localX + r.width * 0.5) * scaleX;
         const cy = canvasHeight - (localY + r.height * 0.5) * scaleY;
         const halfW = r.width * 0.5 * scaleX;
         const halfH = r.height * 0.5 * scaleY;
-        const radius = Math.min(cssRadius * Math.min(scaleX, scaleY), halfW, halfH);
+        const radius = Math.min(r.cssRadius * minScale, halfW, halfH);
 
         const targetActive = el.classList && el.classList.contains('active') ? 1 : 0;
         let targetHover = 0;
@@ -118,10 +149,19 @@ export function createButtonReflectionTracker() {
           }
         }
 
-        const prev = smoothState.get(el) || { active: targetActive, hover: targetHover };
-        const active = prev.active + (targetActive - prev.active) * blend;
-        const hover = prev.hover + (targetHover - prev.hover) * blend;
-        smoothState.set(el, { active, hover });
+        const prev = smoothState.get(el);
+        let active;
+        let hover;
+        if (prev) {
+          active = prev.active + (targetActive - prev.active) * blend;
+          hover = prev.hover + (targetHover - prev.hover) * blend;
+          prev.active = active;
+          prev.hover = hover;
+        } else {
+          active = targetActive;
+          hover = targetHover;
+          smoothState.set(el, { active, hover });
+        }
 
         const base = count * 4;
         rects[base] = cx;
@@ -132,7 +172,7 @@ export function createButtonReflectionTracker() {
         meta[base] = active;
         meta[base + 1] = hover;
         meta[base + 2] = radius;
-        meta[base + 3] = classifyKind(el);
+        meta[base + 3] = r.kind;
 
         count += 1;
       }

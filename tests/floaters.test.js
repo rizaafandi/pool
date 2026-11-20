@@ -89,17 +89,23 @@ describe('createFloaters', () => {
     expect(petal.vx).toBeGreaterThan(beforeVx);
   });
 
-  it('caps total petals at maxCount by evicting the oldest resting petal first', () => {
-    const floaters = createFloaters({ count: 2, maxCount: 3, rng: () => 0.5 });
-    const firstId = floaters.list()[0].id;
-    const dropped1 = floaters.dropPetal({ x: 0, z: 0, altitude: 0.8 });
-    const dropped2 = floaters.dropPetal({ x: 0.2, z: 0.1, altitude: 0.8 });
+  it('preserves all existing petals when dropping new petals without evicting old ones', () => {
+    const floaters = createFloaters({ count: 2, rng: () => 0.5 });
+    const initialIds = floaters.list().map((p) => p.id);
+    const addedIds = [];
+    for (let i = 0; i < FLOATERS.maxCount + 5; i++) {
+      const dropped = floaters.dropPetal({ x: 0, z: 0, altitude: 0.8 });
+      addedIds.push(dropped.id);
+    }
 
     const ids = floaters.list().map((p) => p.id);
-    expect(ids).toHaveLength(3);
-    expect(ids).not.toContain(firstId);
-    expect(ids).toContain(dropped1.id);
-    expect(ids).toContain(dropped2.id);
+    expect(ids).toHaveLength(2 + FLOATERS.maxCount + 5);
+    for (const id of initialIds) {
+      expect(ids).toContain(id);
+    }
+    for (const id of addedIds) {
+      expect(ids).toContain(id);
+    }
   });
 
   it('projects an airborne petal with a separate water-surface shadow that converges upon landing', () => {

@@ -205,14 +205,16 @@ export function createKoi(options = {}) {
         const targetBend = clamp(angVel * 0.16, -0.34, 0.34);
         f.bend += (targetBend - f.bend) * Math.min(1, dt * 6.5);
 
-        // Speed & depth relaxation
+        // Speed & depth relaxation with natural Nishikigoi burst-and-glide cadence
+        const glideCycle = 0.5 + 0.5 * Math.sin(elapsed * 0.72 + f.wanderOffset * 1.3);
+        const strokeDrive = glideCycle * glideCycle; // gentle propulsion strokes separated by calm glides
         if (f.dartTimer > 0) {
           f.dartTimer = Math.max(0, f.dartTimer - dt);
         } else {
-          const cruisePulse = f.baseSpeed * (0.92 + 0.16 * Math.sin(elapsed * 0.9 + f.wanderOffset));
-          f.speed += (cruisePulse - f.speed) * Math.min(1, dt * 2.2);
+          const cruisePulse = f.baseSpeed * (0.80 + 0.34 * strokeDrive);
+          f.speed += (cruisePulse - f.speed) * Math.min(1, dt * 2.4);
           f.targetY = clamp(
-            f.baseY + Math.sin(elapsed * 0.4 + f.wanderOffset) * 0.025,
+            f.baseY + Math.sin(elapsed * 0.38 + f.wanderOffset) * 0.028,
             KOI.minY,
             KOI.maxY,
           );
@@ -227,8 +229,10 @@ export function createKoi(options = {}) {
         f.x = clamp(f.x, -halfX * 1.25, halfX * 1.25);
         f.z = clamp(f.z, KOI.minZ - 0.22, KOI.maxZ + 0.22);
 
-        // Tail-beat phase speeds up during darts
-        const beatRate = 4.6 + (f.speed / Math.max(0.05, KOI.cruiseSpeed)) * 3.8;
+        // Tail-beat cadence slows gracefully during glides and accelerates during propulsion/darts
+        const speedRatio = f.speed / Math.max(0.05, KOI.cruiseSpeed);
+        const glideSlow = f.dartTimer > 0 ? 1.0 : (0.68 + 0.52 * strokeDrive);
+        const beatRate = (3.4 + speedRatio * 4.2) * glideSlow;
         f.phase = (f.phase + beatRate * dt) % (Math.PI * 200);
       }
 

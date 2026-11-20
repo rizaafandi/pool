@@ -16,7 +16,6 @@ import {
   WATER_CONDITIONS,
   WAVES,
 } from './config.js';
-import { createHands } from './input/hands.js';
 import { createHandTracker } from './input/handTracker.js';
 import { pickFloatingObject } from './input/grab.js';
 import { impulseStrength, ndcWaterHit, planarSpeed } from './input/touch.js';
@@ -30,6 +29,7 @@ import { createLanterns, projectLantern } from './sim/lanterns.js';
 import { createRain } from './sim/rain.js';
 import { createSplashes } from './sim/splashes.js';
 import { createButtonReflectionTracker, themeCssVars } from './ui/buttonReflections.js';
+import { createControlsMenu } from './ui/controlsMenu.js';
 import { createOverlay } from './ui/overlay.js';
 
 const canvas = document.querySelector('#pool');
@@ -39,6 +39,11 @@ const toggleButton = document.querySelector('#cam-toggle');
 const gestureBadge = document.querySelector('#gesture-badge');
 const mirrorButton = document.querySelector('#mirror-toggle');
 const sensitivityButton = document.querySelector('#sens-toggle');
+const controlsToggle = document.querySelector('#controls-toggle');
+const controlsDrawer = document.querySelector('#controls-drawer');
+const groupLighting = document.querySelector('#group-lighting');
+const groupPond = document.querySelector('#group-pond');
+const groupAtmosphere = document.querySelector('#group-atmosphere');
 const rainButton = document.querySelector('#rain-toggle');
 const petalsButton = document.querySelector('#petals-toggle');
 const lanternButton = document.querySelector('#lantern-toggle');
@@ -49,7 +54,6 @@ const soundButton = document.querySelector('#sound-toggle');
 const cycleButton = document.querySelector('#cycle-toggle');
 const zenButton = document.querySelector('#zen-toggle');
 const zenExitButton = document.querySelector('#zen-exit');
-const themeGroup = document.querySelector('.theme-group');
 const themeButtons = Array.from(document.querySelectorAll('[data-theme]'));
 const gate = document.querySelector('#gate');
 const button = document.querySelector('#start');
@@ -72,15 +76,43 @@ const overlay = createOverlay({
   sensitivityButton,
 });
 const buttonReflections = createButtonReflectionTracker();
-const reflectiveUiElements = [
-  ...(themeGroup ? [themeGroup] : themeButtons),
-  rainButton,
-  petalsButton,
-  lanternButton,
-  koiButton,
-  bedButton,
-  waterButton,
-  soundButton,
+const mobileLayoutMq = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(max-width: 960px)')
+  : null;
+
+const controlsMenu = createControlsMenu({
+  toggleButton: controlsToggle,
+  drawer: controlsDrawer,
+  groups: [
+    {
+      id: 'lighting',
+      container: groupLighting,
+      header: document.querySelector('[data-group-toggle="lighting"]'),
+      summaryEl: document.querySelector('[data-group-summary="lighting"]'),
+      defaultExpanded: true,
+    },
+    {
+      id: 'pond',
+      container: groupPond,
+      header: document.querySelector('[data-group-toggle="pond"]'),
+      summaryEl: document.querySelector('[data-group-summary="pond"]'),
+      defaultExpanded: true,
+    },
+    {
+      id: 'atmosphere',
+      container: groupAtmosphere,
+      header: document.querySelector('[data-group-toggle="atmosphere"]'),
+      summaryEl: document.querySelector('[data-group-summary="atmosphere"]'),
+      defaultExpanded: true,
+    },
+  ],
+  onLayoutChange: () => buttonReflections.invalidate(),
+});
+
+const desktopReflectiveElements = [
+  groupLighting,
+  groupPond,
+  groupAtmosphere,
   zenButton,
   mirrorButton,
   sensitivityButton,
@@ -88,6 +120,36 @@ const reflectiveUiElements = [
   gestureBadge,
   button,
 ].filter(Boolean);
+
+const mobileClosedReflectiveElements = [
+  controlsToggle,
+  zenButton,
+  mirrorButton,
+  sensitivityButton,
+  toggleButton,
+  gestureBadge,
+  button,
+].filter(Boolean);
+
+const mobileOpenReflectiveElements = [
+  controlsToggle,
+  controlsDrawer,
+  zenButton,
+  mirrorButton,
+  sensitivityButton,
+  toggleButton,
+  gestureBadge,
+  button,
+].filter(Boolean);
+
+function getReflectiveUiElements() {
+  if (zenMode) return [];
+  const isMobile = mobileLayoutMq ? mobileLayoutMq.matches : cssWidth <= 960;
+  if (isMobile) {
+    return controlsMenu.isDrawerOpen() ? mobileOpenReflectiveElements : mobileClosedReflectiveElements;
+  }
+  return desktopReflectiveElements;
+}
 const handTracker = createHandTracker();
 const audio = createWaterAudio();
 const floaters = createFloaters();
@@ -110,6 +172,7 @@ let lastCssVarSyncAt = 0;
 let stormGustCooldown = 0;
 let cssWidth = window.innerWidth;
 let cssHeight = window.innerHeight;
+let canvasRect = { left: 0, top: 0, width: cssWidth, height: cssHeight };
 const activePointers = new Map();
 const grabbedPointers = new Map();
 const pendingDrops = new Map();
@@ -125,6 +188,23 @@ function applyThemeCssVars(theme) {
   }
 }
 
+function syncGroupSummaries() {
+  const themeLabel = THEMES[currentThemeId] ? THEMES[currentThemeId].label : 'Sunlit';
+  controlsMenu.setGroupSummary('lighting', dayCycle.isEnabled() ? `Cycle · ${themeLabel}` : themeLabel);
+
+  const pondParts = [];
+  if (koi.isEnabled()) pondParts.push('Koi');
+  const lanternCount = lanterns.list().length;
+  if (lanternCount > 0) pondParts.push(`${lanternCount} lantern${lanternCount > 1 ? 's' : ''}`);
+  controlsMenu.setGroupSummary('pond', pondParts.length > 0 ? pondParts.join(' · ') : 'Still');
+
+  const bedLabel = POOL_BEDS[POOL_BED_ORDER[bedIdx]].label;
+  const waterLabel = WATER_CONDITIONS[WATER_CONDITION_ORDER[waterCondIdx]].label;
+  const atmoParts = [bedLabel, waterLabel];
+  if (rain.isEnabled()) atmoParts.unshift('Rain');
+  controlsMenu.setGroupSummary('atmosphere', atmoParts.join(' · '));
+}
+
 function syncThemeButtons(themeId, cycleActive = false) {
   for (const btn of themeButtons) {
     const active = !cycleActive && btn.dataset.theme === themeId;
@@ -132,6 +212,7 @@ function syncThemeButtons(themeId, cycleActive = false) {
     btn.setAttribute('aria-pressed', String(active));
   }
   syncToggleButton(cycleButton, cycleActive);
+  syncGroupSummaries();
 }
 
 function setTheme(themeId, immediate = false) {
@@ -151,6 +232,7 @@ function setPoolBed(bedId, immediate = false) {
   const bed = POOL_BEDS[bedId];
   renderer.setBed(bedId, immediate);
   syncToggleButton(bedButton, bedId !== 'tiles', bed.label);
+  syncGroupSummaries();
 }
 
 function setWaterCondition(condId, immediate = false) {
@@ -160,16 +242,20 @@ function setWaterCondition(condId, immediate = false) {
   const cond = WATER_CONDITIONS[condId];
   renderer.setWaterCondition(condId, immediate);
   syncToggleButton(waterButton, condId !== 'breeze', cond.label);
+  syncGroupSummaries();
 }
 
 function setZenMode(next) {
   zenMode = Boolean(next);
+  if (zenMode) controlsMenu.setDrawerOpen(false);
   document.body.classList.toggle('zen-mode', zenMode);
   if (!zenMode) document.body.classList.remove('zen-peek');
   syncToggleButton(zenButton, zenMode);
+  buttonReflections.invalidate();
 }
 
 applyThemeCssVars(THEMES[currentThemeId]);
+syncGroupSummaries();
 
 function syncToggleButton(btn, active, label) {
   if (!btn) return;
@@ -178,9 +264,13 @@ function syncToggleButton(btn, active, label) {
   if (label !== undefined) {
     const labelEl = typeof btn.querySelector === 'function' ? btn.querySelector('.btn-label') : null;
     if (labelEl) {
-      labelEl.textContent = label;
-    } else {
+      if (labelEl.textContent !== label) {
+        labelEl.textContent = label;
+        buttonReflections.invalidate();
+      }
+    } else if (btn.textContent !== label) {
       btn.textContent = label;
+      buttonReflections.invalidate();
     }
   }
 }
@@ -190,12 +280,51 @@ function resize() {
   const rect = canvas.getBoundingClientRect();
   cssWidth = rect.width || window.innerWidth;
   cssHeight = rect.height || window.innerHeight;
+  canvasRect = {
+    left: rect.left || 0,
+    top: rect.top || 0,
+    width: cssWidth,
+    height: cssHeight,
+  };
   // Adaptive quality scales only the WebGL backing store; HUD stays crisp at full dpr.
   const renderDpr = dpr * quality.scale();
   canvas.width = Math.max(1, Math.floor(cssWidth * renderDpr));
   canvas.height = Math.max(1, Math.floor(cssHeight * renderDpr));
   renderer.resize();
   overlay.resize(cssWidth, cssHeight, dpr);
+  buttonReflections.invalidate();
+}
+
+if (typeof ResizeObserver === 'function') {
+  const uiLayoutObserver = new ResizeObserver(() => {
+    buttonReflections.invalidate();
+  });
+  const topBar = document.querySelector('.top-bar');
+  const camControls = document.querySelector('#cam-controls');
+  if (topBar) uiLayoutObserver.observe(topBar);
+  if (controlsDrawer) uiLayoutObserver.observe(controlsDrawer);
+  if (camControls) uiLayoutObserver.observe(camControls);
+}
+if (mobileLayoutMq && typeof mobileLayoutMq.addEventListener === 'function') {
+  mobileLayoutMq.addEventListener('change', () => {
+    if (!mobileLayoutMq.matches) controlsMenu.setDrawerOpen(false);
+    buttonReflections.invalidate();
+  });
+}
+if (controlsToggle) {
+  controlsToggle.addEventListener('click', () => {
+    audio.unlock();
+    controlsMenu.toggleDrawer();
+    rippleUnderElement(controlsToggle);
+  });
+}
+for (const headerBtn of document.querySelectorAll('[data-group-toggle]')) {
+  headerBtn.addEventListener('click', () => {
+    controlsMenu.toggleGroup(headerBtn.dataset.groupToggle);
+  });
+}
+if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+  document.fonts.ready.then(() => buttonReflections.invalidate());
 }
 
 function queueDrop(key, drop) {
@@ -227,9 +356,8 @@ function stamp(hit, speed, key = 'default', scale = 1) {
 }
 
 function eventHit(event) {
-  const rect = canvas.getBoundingClientRect();
-  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  const ndcY = 1 - ((event.clientY - rect.top) / rect.height) * 2;
+  const ndcX = ((event.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  const ndcY = 1 - ((event.clientY - canvasRect.top) / canvasRect.height) * 2;
   return ndcWaterHit(
     ndcX,
     ndcY,
@@ -242,10 +370,9 @@ function eventHit(event) {
 }
 
 function aimLightFromEvent(event) {
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  const ndcY = 1 - ((event.clientY - rect.top) / rect.height) * 2;
+  if (!canvasRect.width || !canvasRect.height) return;
+  const ndcX = ((event.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  const ndcY = 1 - ((event.clientY - canvasRect.top) / canvasRect.height) * 2;
   renderer.setCustomSunDir(sunDirFromNdc(ndcX, ndcY));
 }
 
@@ -278,6 +405,9 @@ function releaseGrab(pointerId) {
 }
 
 canvas.addEventListener('pointerdown', (event) => {
+  if (controlsMenu.isDrawerOpen()) {
+    controlsMenu.setDrawerOpen(false);
+  }
   if (event.altKey) {
     lightDragPointerId = event.pointerId;
     dayCycle.setEnabled(false);
@@ -286,9 +416,8 @@ canvas.addEventListener('pointerdown', (event) => {
     return;
   }
 
-  const rect = canvas.getBoundingClientRect();
-  const screenX = event.clientX - rect.left;
-  const screenY = event.clientY - rect.top;
+  const screenX = event.clientX - canvasRect.left;
+  const screenY = event.clientY - canvasRect.top;
   const pick = pickFloatingObject(screenX, screenY, lastProjectedLanterns, lastProjectedFloaters);
   const body = findFloatingBody(pick);
   const hit = eventHit(event);
@@ -389,10 +518,9 @@ canvas.addEventListener('pointermove', (event) => {
   const prev = activePointers.get(event.pointerId);
   if (!prev) {
     if (event.pointerType === 'mouse') {
-      const rect = canvas.getBoundingClientRect();
       const hoverPick = pickFloatingObject(
-        event.clientX - rect.left,
-        event.clientY - rect.top,
+        event.clientX - canvasRect.left,
+        event.clientY - canvasRect.top,
         lastProjectedLanterns,
         lastProjectedFloaters,
       );
@@ -464,13 +592,12 @@ window.addEventListener('pointermove', (event) => {
 
 function rippleUnderElement(el) {
   if (!el || typeof el.getBoundingClientRect !== 'function') return;
-  const cRect = canvas.getBoundingClientRect();
-  if (!cRect.width || !cRect.height) return;
+  if (!canvasRect.width || !canvasRect.height) return;
   const bRect = el.getBoundingClientRect();
   const cx = bRect.left + bRect.width * 0.5;
   const cy = bRect.top + bRect.height * 0.5;
-  const ndcX = ((cx - cRect.left) / cRect.width) * 2 - 1;
-  const ndcY = 1 - ((cy - cRect.top) / cRect.height) * 2;
+  const ndcX = ((cx - canvasRect.left) / canvasRect.width) * 2 - 1;
+  const ndcY = 1 - ((cy - canvasRect.top) / canvasRect.height) * 2;
   const hit = ndcWaterHit(
     ndcX,
     ndcY,
@@ -497,6 +624,7 @@ function toggleRain(fromButton = false) {
   audio.unlock();
   const active = rain.toggle();
   syncToggleButton(rainButton, active);
+  syncGroupSummaries();
   audio.setRainActive(active);
   if (fromButton && rainButton) rippleUnderElement(rainButton);
 }
@@ -523,6 +651,7 @@ function toggleKoi(fromButton = false) {
   audio.unlock();
   const active = koi.toggle();
   syncToggleButton(koiButton, active);
+  syncGroupSummaries();
   if (fromButton && koiButton) rippleUnderElement(koiButton);
 }
 
@@ -544,6 +673,7 @@ function placeLantern(fromButton = false) {
     queueDrop(`lantern:${placed.id}`, placed);
     const pan = Math.max(-0.85, Math.min(0.85, placed.x / 1.15));
     audio.playDrop(0.32, performance.now(), pan);
+    syncGroupSummaries();
   }
   if (fromButton && lanternButton) rippleUnderElement(lanternButton);
 }
@@ -618,6 +748,7 @@ if (mirrorButton) {
   mirrorButton.addEventListener('click', () => {
     mirrorX = !mirrorX;
     overlay.setMirrored(mirrorX);
+    buttonReflections.invalidate();
     rippleUnderElement(mirrorButton);
   });
 }
@@ -626,6 +757,7 @@ if (sensitivityButton) {
   sensitivityButton.addEventListener('click', () => {
     sensitivityIdx = (sensitivityIdx + 1) % SENSITIVITY_LEVELS.length;
     overlay.setSensitivityLabel(SENSITIVITY_LEVELS[sensitivityIdx].label);
+    buttonReflections.invalidate();
     rippleUnderElement(sensitivityButton);
   });
 }
@@ -633,6 +765,7 @@ if (sensitivityButton) {
 if (toggleButton) {
   toggleButton.addEventListener('click', () => {
     overlay.toggle();
+    buttonReflections.invalidate();
     rippleUnderElement(toggleButton);
   });
 }
@@ -659,13 +792,18 @@ window.addEventListener('keydown', (event) => {
     toggleCycle(false);
   } else if (key === 'h') {
     setZenMode(!zenMode);
-  } else if (key === 'escape' && zenMode) {
-    setZenMode(false);
+  } else if (key === 'escape') {
+    if (zenMode) {
+      setZenMode(false);
+    } else if (controlsMenu.isDrawerOpen()) {
+      controlsMenu.setDrawerOpen(false);
+    }
   } else if (key === 'm') {
     const muted = audio.toggleMute();
     syncToggleButton(soundButton, !muted, muted ? 'Sound: Off' : 'Sound');
   } else if (key === 'c' && hands) {
     overlay.toggle();
+    buttonReflections.invalidate();
   }
 });
 
@@ -673,23 +811,30 @@ button.addEventListener('click', async () => {
   audio.unlock();
   if (!window.isSecureContext) {
     button.textContent = 'Open this page on localhost.';
+    buttonReflections.invalidate();
     return;
   }
   button.disabled = true;
   button.textContent = 'Starting the camera…';
+  buttonReflections.invalidate();
   let stream = null;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: 640, height: 480 },
-      audio: false,
-    });
+    const [mediaStream, handsModule] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: 640, height: 480 },
+        audio: false,
+      }),
+      import('./input/hands.js'),
+    ]);
+    stream = mediaStream;
     video.srcObject = stream;
     await video.play();
-    hands = await createHands(video);
+    hands = await handsModule.createHands(video);
     gate.classList.add('hidden');
     overlay.setCameraActive(true);
     overlay.setMirrored(mirrorX);
     overlay.setSensitivityLabel(SENSITIVITY_LEVELS[sensitivityIdx].label);
+    buttonReflections.invalidate();
   } catch (error) {
     if (stream) {
       for (const track of stream.getTracks()) track.stop();
@@ -697,6 +842,7 @@ button.addEventListener('click', async () => {
     }
     button.disabled = false;
     button.textContent = 'Camera blocked. Click and drag the water instead.';
+    buttonReflections.invalidate();
   }
 });
 
@@ -731,6 +877,7 @@ if (typeof window !== 'undefined' && window.location && window.location.search) 
   if (params.get('zen') === '1' || params.get('zen') === 'true') {
     setZenMode(true);
   }
+  syncGroupSummaries();
 }
 
 resolveBuoyantCollisions(
@@ -760,7 +907,10 @@ function frame(now) {
   if (dayCycle.isEnabled()) {
     const cycleSample = dayCycle.step(dt);
     hudTheme = cycleSample.theme;
-    currentThemeId = cycleSample.nearestThemeId;
+    if (cycleSample.nearestThemeId !== currentThemeId) {
+      currentThemeId = cycleSample.nearestThemeId;
+      syncGroupSummaries();
+    }
     renderer.setCustomTheme(cycleSample.theme);
     if (now - lastCssVarSyncAt > 180) {
       applyThemeCssVars(cycleSample.theme);
@@ -790,7 +940,8 @@ function frame(now) {
   }
 
   // Visible falling raindrops, impact splashes, ripples & raindrop/thunder sound effects
-  const rainFrame = rain.step(dt, now, CAMERA, aspect, POOL, currentSwellTime);
+  const mvp = renderer.getMvp();
+  const rainFrame = rain.step(dt, now, CAMERA, aspect, POOL, currentSwellTime, mvp);
   for (const rainDrop of rainFrame.drops) {
     queueDrop(rainDrop.key, rainDrop);
     audio.playRainDrop(rainDrop.intensity || 0.7, now);
@@ -826,7 +977,9 @@ function frame(now) {
       }
     }
     indicators = tracked.indicators;
-    overlay.setGestureLabel(tracked.gestureLabel);
+    if (overlay.setGestureLabel(tracked.gestureLabel)) {
+      buttonReflections.invalidate();
+    }
   }
 
   // Fixed-step heightfield simulation + floating blossoms & water lanterns physics
@@ -852,8 +1005,8 @@ function frame(now) {
   }
 
   const uiPills = buttonReflections.collect(
-    zenMode ? [] : reflectiveUiElements,
-    canvas.getBoundingClientRect(),
+    getReflectiveUiElements(),
+    canvasRect,
     canvas.width,
     canvas.height,
     dt,
@@ -873,7 +1026,6 @@ function frame(now) {
   );
 
   // Project visible floating blossoms, water lanterns and interactive water splashes onto HUD canvas
-  const mvp = renderer.getMvp();
   const swellScale = renderer.getSwellScale();
   const interactionSplashes = splashes.step(dt, CAMERA, aspect, mvp);
   const projectedFloaters = [];

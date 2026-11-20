@@ -12,7 +12,7 @@ async function landmarker(fileset, delegate) {
   });
 }
 
-export async function createHands(video) {
+export async function createHands(video, { minIntervalMs = 33 } = {}) {
   const fileset = await FilesetResolver.forVisionTasks(HAND.wasmBase);
   let detector;
   try {
@@ -22,24 +22,28 @@ export async function createHands(video) {
   }
   let lastVideoTime = -1;
   let lastStamp = 0;
-  let cached = null;
+  let lastDetectAt = -Infinity;
+  let cachedFresh = null;
+  let cachedStale = null;
 
   return {
     sample() {
       if (video.readyState < 2) return null;
-      if (video.currentTime === lastVideoTime) {
-        return cached && { ...cached, fresh: false };
+      const now = performance.now();
+      if (video.currentTime === lastVideoTime || now - lastDetectAt < minIntervalMs) {
+        return cachedStale;
       }
       lastVideoTime = video.currentTime;
-      let stamp = performance.now();
+      lastDetectAt = now;
+      let stamp = now;
       if (stamp <= lastStamp) stamp = lastStamp + 1;
       lastStamp = stamp;
       const result = detector.detectForVideo(video, stamp);
       const list = result.landmarks || [];
-      cached = {
-        hands: list.map((landmarks) => ({ landmarks })),
-      };
-      return { ...cached, fresh: true };
+      const hands = list.map((landmarks) => ({ landmarks }));
+      cachedFresh = { hands, fresh: true };
+      cachedStale = { hands, fresh: false };
+      return cachedFresh;
     },
   };
 }

@@ -98,7 +98,7 @@ function blendTheme(cur, dst, k) {
   cur.nightGlow += (dst.nightGlow - cur.nightGlow) * k;
 }
 
-function uploadWaves(gl, prog, swellScale = 1.0) {
+function packWaves() {
   const packed = new Float32Array(16);
   const phases = new Float32Array(4);
   for (let i = 0; i < WAVES.length; i++) {
@@ -108,10 +108,46 @@ function uploadWaves(gl, prog, swellScale = 1.0) {
     packed[i * 4 + 3] = WAVES[i].steepness;
     phases[i] = WAVES[i].phase;
   }
-  gl.uniform1f(gl.getUniformLocation(prog, 'u_swellScale'), swellScale);
-  gl.uniform1i(gl.getUniformLocation(prog, 'u_waveCount'), WAVES.length);
-  gl.uniform4fv(gl.getUniformLocation(prog, 'u_waves'), packed);
-  gl.uniform1fv(gl.getUniformLocation(prog, 'u_phases'), phases);
+  return { packed, phases };
+}
+
+function resolveUniforms(gl, prog, names) {
+  const out = {};
+  for (const name of names) {
+    out[name] = gl.getUniformLocation(prog, name);
+  }
+  return out;
+}
+
+function makeArrayVao(gl, loc, arrayBuffer, elementBuffer = null) {
+  if (typeof gl.createVertexArray !== 'function') return null;
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, arrayBuffer);
+  if (loc >= 0) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  }
+  if (elementBuffer) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, elementBuffer);
+  }
+  gl.bindVertexArray(null);
+  return vao;
+}
+
+function bindGeometry(gl, vao, loc, arrayBuffer, elementBuffer = null) {
+  if (vao) {
+    gl.bindVertexArray(vao);
+    return;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, arrayBuffer);
+  if (loc >= 0) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  }
+  if (elementBuffer) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, elementBuffer);
+  }
 }
 
 export function createRenderer(canvas) {
@@ -143,6 +179,78 @@ export function createRenderer(canvas) {
   const sceneTarget = makeSceneTarget(gl, canvas.width || 1, canvas.height || 1);
   let mvp = new Float32Array(16);
 
+  // Cache attribute locations, VAOs, uniform locations, and static uniform values once at init.
+  const { packed: packedWaves, phases: packedPhases } = packWaves();
+  const texel = 1 / SIM.size;
+  const worldDx = (2 * POOL.halfExtent) / SIM.size;
+
+  const updatePosLoc = gl.getAttribLocation(updateProg, 'a_position');
+  const causticPosLoc = gl.getAttribLocation(causticProg, 'a_xz');
+  const waterPosLoc = gl.getAttribLocation(waterProg, 'a_xz');
+  const uiPosLoc = gl.getAttribLocation(uiGlassProg, 'a_position');
+
+  const updateVao = makeArrayVao(gl, updatePosLoc, quadBuffer);
+  const causticVao = makeArrayVao(gl, causticPosLoc, posBuffer, indexBuffer);
+  const waterVao = makeArrayVao(gl, waterPosLoc, posBuffer, indexBuffer);
+  const uiGlassVao = makeArrayVao(gl, uiPosLoc, quadBuffer);
+
+  const updateU = resolveUniforms(gl, updateProg, [
+    'u_state', 'u_waveSpeed', 'u_damping', 'u_texel', 'u_dropCount', 'u_drops',
+  ]);
+  gl.useProgram(updateProg);
+  gl.uniform1i(updateU.u_state, 0);
+  gl.uniform1f(updateU.u_texel, texel);
+
+  const causticU = resolveUniforms(gl, causticProg, [
+    'u_sim', 'u_time', 'u_half', 'u_texel', 'u_worldDx', 'u_floorY', 'u_ior',
+    'u_sunDir', 'u_absorption', 'u_swellScale', 'u_waveCount', 'u_waves', 'u_phases',
+  ]);
+  gl.useProgram(causticProg);
+  gl.uniform1i(causticU.u_sim, 0);
+  gl.uniform1f(causticU.u_half, POOL.halfExtent);
+  gl.uniform1f(causticU.u_texel, texel);
+  gl.uniform1f(causticU.u_worldDx, worldDx);
+  gl.uniform1f(causticU.u_floorY, POOL.floorY);
+  gl.uniform1f(causticU.u_ior, WATER.ior);
+  gl.uniform3fv(causticU.u_absorption, WATER.absorption);
+  gl.uniform1i(causticU.u_waveCount, WAVES.length);
+  gl.uniform4fv(causticU.u_waves, packedWaves);
+  gl.uniform1fv(causticU.u_phases, packedPhases);
+
+  const waterU = resolveUniforms(gl, waterProg, [
+    'u_sim', 'u_caustic', 'u_mvp', 'u_time', 'u_half', 'u_texel', 'u_worldDx',
+    'u_swellScale', 'u_waveCount', 'u_waves', 'u_phases',
+    'u_camera', 'u_sunDir', 'u_sunColor', 'u_sunIntensity',
+    'u_floorY', 'u_f0', 'u_ior', 'u_absorption',
+    'u_tileDark', 'u_tileMid', 'u_tileBright', 'u_groutCol',
+    'u_skyDeep', 'u_skyMid', 'u_skyBright', 'u_causticTint',
+    'u_shaftStrength', 'u_biolum', 'u_nightGlow',
+    'u_lightning', 'u_rain', 'u_organicScale', 'u_bedWeights',
+    'u_koiCount', 'u_koiPos', 'u_koiMeta', 'u_lanternCount', 'u_lanterns',
+  ]);
+  gl.useProgram(waterProg);
+  gl.uniform1i(waterU.u_sim, 0);
+  gl.uniform1i(waterU.u_caustic, 1);
+  gl.uniform1f(waterU.u_half, POOL.halfExtent);
+  gl.uniform1f(waterU.u_texel, texel);
+  gl.uniform1f(waterU.u_worldDx, worldDx);
+  gl.uniform1i(waterU.u_waveCount, WAVES.length);
+  gl.uniform4fv(waterU.u_waves, packedWaves);
+  gl.uniform1fv(waterU.u_phases, packedPhases);
+  gl.uniform3fv(waterU.u_camera, CAMERA.eye);
+  gl.uniform1f(waterU.u_floorY, POOL.floorY);
+  gl.uniform1f(waterU.u_f0, WATER.f0);
+  gl.uniform1f(waterU.u_ior, WATER.ior);
+  gl.uniform3fv(waterU.u_absorption, WATER.absorption);
+
+  const uiU = resolveUniforms(gl, uiGlassProg, [
+    'u_scene', 'u_resolution', 'u_time', 'u_uiCount', 'u_uiRects', 'u_uiMeta',
+    'u_sunDir', 'u_sunColor', 'u_skyDeep', 'u_skyMid', 'u_skyBright',
+    'u_causticTint', 'u_biolum', 'u_nightGlow',
+  ]);
+  gl.useProgram(uiGlassProg);
+  gl.uniform1i(uiU.u_scene, 0);
+
   function clearTarget(target) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb);
     gl.viewport(0, 0, target.size, target.size);
@@ -157,6 +265,8 @@ export function createRenderer(canvas) {
     const view = lookAt(CAMERA.eye, CAMERA.target, [0, 1, 0]);
     const proj = perspective(CAMERA.fovY, aspect, CAMERA.near, CAMERA.far);
     mvp = multiply(proj, view);
+    gl.useProgram(waterProg);
+    gl.uniformMatrix4fv(waterU.u_mvp, false, mvp);
   }
   rebuildCamera();
 
@@ -215,16 +325,11 @@ export function createRenderer(canvas) {
       gl.disable(gl.BLEND);
       gl.disable(gl.DEPTH_TEST);
       gl.useProgram(updateProg);
-      gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
-      const loc = gl.getAttribLocation(updateProg, 'a_position');
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      bindGeometry(gl, updateVao, updatePosLoc, quadBuffer);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
-      gl.uniform1i(gl.getUniformLocation(updateProg, 'u_state'), 0);
-      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_waveSpeed'), activeCondition.waveSpeed);
-      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_damping'), activeCondition.damping);
-      gl.uniform1f(gl.getUniformLocation(updateProg, 'u_texel'), 1 / SIM.size);
+      gl.uniform1f(updateU.u_waveSpeed, activeCondition.waveSpeed);
+      gl.uniform1f(updateU.u_damping, activeCondition.damping);
       const list = Array.isArray(drops) ? drops : (drops ? [drops] : []);
       let count = 0;
       for (let i = 0; i < list.length && count < SIM.maxDrops; i++) {
@@ -236,9 +341,9 @@ export function createRenderer(canvas) {
         packedDrops[count * 4 + 3] = d.strength;
         count += 1;
       }
-      gl.uniform1i(gl.getUniformLocation(updateProg, 'u_dropCount'), count);
+      gl.uniform1i(updateU.u_dropCount, count);
       if (count > 0) {
-        gl.uniform4fv(gl.getUniformLocation(updateProg, 'u_drops'), packedDrops);
+        gl.uniform4fv(updateU.u_drops, packedDrops);
       }
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       const swap = read;
@@ -269,23 +374,12 @@ export function createRenderer(canvas) {
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.useProgram(causticProg);
-      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
-      const causticLoc = gl.getAttribLocation(causticProg, 'a_xz');
-      gl.enableVertexAttribArray(causticLoc);
-      gl.vertexAttribPointer(causticLoc, 2, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      bindGeometry(gl, causticVao, causticPosLoc, posBuffer, indexBuffer);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
-      gl.uniform1i(gl.getUniformLocation(causticProg, 'u_sim'), 0);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_time'), swellT);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_half'), POOL.halfExtent);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_texel'), 1 / SIM.size);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_worldDx'), (2 * POOL.halfExtent) / SIM.size);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_floorY'), POOL.floorY);
-      gl.uniform1f(gl.getUniformLocation(causticProg, 'u_ior'), WATER.ior);
-      gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_sunDir'), activeTheme.sunDir);
-      gl.uniform3fv(gl.getUniformLocation(causticProg, 'u_absorption'), WATER.absorption);
-      uploadWaves(gl, causticProg, currentSwellScale);
+      gl.uniform1f(causticU.u_time, swellT);
+      gl.uniform3fv(causticU.u_sunDir, activeTheme.sunDir);
+      gl.uniform1f(causticU.u_swellScale, currentSwellScale);
       gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
       gl.disable(gl.BLEND);
 
@@ -295,56 +389,41 @@ export function createRenderer(canvas) {
       gl.clearColor(activeTheme.skyDeep[0], activeTheme.skyDeep[1], activeTheme.skyDeep[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.useProgram(waterProg);
-      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
-      const loc = gl.getAttribLocation(waterProg, 'a_xz');
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      bindGeometry(gl, waterVao, waterPosLoc, posBuffer, indexBuffer);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, read.tex);
-      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_sim'), 0);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, caustic.tex);
-      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_caustic'), 1);
-      gl.uniformMatrix4fv(gl.getUniformLocation(waterProg, 'u_mvp'), false, mvp);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_time'), swellT);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_half'), POOL.halfExtent);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_texel'), 1 / SIM.size);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_worldDx'), (2 * POOL.halfExtent) / SIM.size);
-      uploadWaves(gl, waterProg, currentSwellScale);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_camera'), CAMERA.eye);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_sunDir'), activeTheme.sunDir);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_sunColor'), activeTheme.sunColor);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_sunIntensity'), activeTheme.sunIntensity);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_floorY'), POOL.floorY);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_f0'), WATER.f0);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_ior'), WATER.ior);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_absorption'), WATER.absorption);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_tileDark'), activeTheme.tileDark);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_tileMid'), activeTheme.tileMid);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_tileBright'), activeTheme.tileBright);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_groutCol'), activeTheme.groutCol);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_skyDeep'), activeTheme.skyDeep);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_skyMid'), activeTheme.skyMid);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_skyBright'), activeTheme.skyBright);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_causticTint'), activeTheme.causticTint);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_shaftStrength'), activeTheme.shaftStrength);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_biolum'), activeTheme.biolum);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_nightGlow'), activeTheme.nightGlow);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_lightning'), lightning);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_rain'), rainIntensity);
-      gl.uniform1f(gl.getUniformLocation(waterProg, 'u_organicScale'), currentOrganicScale);
-      gl.uniform3fv(gl.getUniformLocation(waterProg, 'u_bedWeights'), activeBedWeights);
+      gl.uniform1f(waterU.u_time, swellT);
+      gl.uniform1f(waterU.u_swellScale, currentSwellScale);
+      gl.uniform3fv(waterU.u_sunDir, activeTheme.sunDir);
+      gl.uniform3fv(waterU.u_sunColor, activeTheme.sunColor);
+      gl.uniform1f(waterU.u_sunIntensity, activeTheme.sunIntensity);
+      gl.uniform3fv(waterU.u_tileDark, activeTheme.tileDark);
+      gl.uniform3fv(waterU.u_tileMid, activeTheme.tileMid);
+      gl.uniform3fv(waterU.u_tileBright, activeTheme.tileBright);
+      gl.uniform3fv(waterU.u_groutCol, activeTheme.groutCol);
+      gl.uniform3fv(waterU.u_skyDeep, activeTheme.skyDeep);
+      gl.uniform3fv(waterU.u_skyMid, activeTheme.skyMid);
+      gl.uniform3fv(waterU.u_skyBright, activeTheme.skyBright);
+      gl.uniform3fv(waterU.u_causticTint, activeTheme.causticTint);
+      gl.uniform1f(waterU.u_shaftStrength, activeTheme.shaftStrength);
+      gl.uniform1f(waterU.u_biolum, activeTheme.biolum);
+      gl.uniform1f(waterU.u_nightGlow, activeTheme.nightGlow);
+      gl.uniform1f(waterU.u_lightning, lightning);
+      gl.uniform1f(waterU.u_rain, rainIntensity);
+      gl.uniform1f(waterU.u_organicScale, currentOrganicScale);
+      gl.uniform3fv(waterU.u_bedWeights, activeBedWeights);
       const koiCount = koiData && koiData.count > 0 ? koiData.count : 0;
-      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_koiCount'), koiCount);
+      gl.uniform1i(waterU.u_koiCount, koiCount);
       if (koiCount > 0) {
-        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_koiPos'), koiData.pos);
-        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_koiMeta'), koiData.meta);
+        gl.uniform4fv(waterU.u_koiPos, koiData.pos);
+        gl.uniform4fv(waterU.u_koiMeta, koiData.meta);
       }
       const lanternCount = lanternData && lanternData.count > 0 ? lanternData.count : 0;
-      gl.uniform1i(gl.getUniformLocation(waterProg, 'u_lanternCount'), lanternCount);
+      gl.uniform1i(waterU.u_lanternCount, lanternCount);
       if (lanternCount > 0) {
-        gl.uniform4fv(gl.getUniformLocation(waterProg, 'u_lanterns'), lanternData.data);
+        gl.uniform4fv(waterU.u_lanterns, lanternData.data);
       }
       gl.drawElements(gl.TRIANGLES, grid.indices.length, gl.UNSIGNED_INT, 0);
 
@@ -353,29 +432,25 @@ export function createRenderer(canvas) {
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.BLEND);
       gl.useProgram(uiGlassProg);
-      gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
-      const uiLoc = gl.getAttribLocation(uiGlassProg, 'a_position');
-      gl.enableVertexAttribArray(uiLoc);
-      gl.vertexAttribPointer(uiLoc, 2, gl.FLOAT, false, 0, 0);
+      bindGeometry(gl, uiGlassVao, uiPosLoc, quadBuffer);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sceneTarget.tex);
-      gl.uniform1i(gl.getUniformLocation(uiGlassProg, 'u_scene'), 0);
-      gl.uniform2f(gl.getUniformLocation(uiGlassProg, 'u_resolution'), canvas.width, canvas.height);
-      gl.uniform1f(gl.getUniformLocation(uiGlassProg, 'u_time'), timeSeconds * SWELL_TIME_SCALE);
+      gl.uniform2f(uiU.u_resolution, canvas.width, canvas.height);
+      gl.uniform1f(uiU.u_time, timeSeconds * SWELL_TIME_SCALE);
       const uiCount = uiPills && uiPills.count > 0 ? uiPills.count : 0;
-      gl.uniform1i(gl.getUniformLocation(uiGlassProg, 'u_uiCount'), uiCount);
+      gl.uniform1i(uiU.u_uiCount, uiCount);
       if (uiCount > 0) {
-        gl.uniform4fv(gl.getUniformLocation(uiGlassProg, 'u_uiRects'), uiPills.rects);
-        gl.uniform4fv(gl.getUniformLocation(uiGlassProg, 'u_uiMeta'), uiPills.meta);
+        gl.uniform4fv(uiU.u_uiRects, uiPills.rects);
+        gl.uniform4fv(uiU.u_uiMeta, uiPills.meta);
       }
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_sunDir'), activeTheme.sunDir);
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_sunColor'), activeTheme.sunColor);
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_skyDeep'), activeTheme.skyDeep);
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_skyMid'), activeTheme.skyMid);
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_skyBright'), activeTheme.skyBright);
-      gl.uniform3fv(gl.getUniformLocation(uiGlassProg, 'u_causticTint'), activeTheme.causticTint);
-      gl.uniform1f(gl.getUniformLocation(uiGlassProg, 'u_biolum'), activeTheme.biolum);
-      gl.uniform1f(gl.getUniformLocation(uiGlassProg, 'u_nightGlow'), activeTheme.nightGlow);
+      gl.uniform3fv(uiU.u_sunDir, activeTheme.sunDir);
+      gl.uniform3fv(uiU.u_sunColor, activeTheme.sunColor);
+      gl.uniform3fv(uiU.u_skyDeep, activeTheme.skyDeep);
+      gl.uniform3fv(uiU.u_skyMid, activeTheme.skyMid);
+      gl.uniform3fv(uiU.u_skyBright, activeTheme.skyBright);
+      gl.uniform3fv(uiU.u_causticTint, activeTheme.causticTint);
+      gl.uniform1f(uiU.u_biolum, activeTheme.biolum);
+      gl.uniform1f(uiU.u_nightGlow, activeTheme.nightGlow);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     },
     resize() {

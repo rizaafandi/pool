@@ -97,6 +97,17 @@ function computeRingProjection(mvp, point, aspect) {
   };
 }
 
+const IDLE_RAIN_FRAME = Object.freeze({
+  drops: Object.freeze([]),
+  thunder: null,
+  visuals: Object.freeze({
+    streaks: Object.freeze([]),
+    splashes: Object.freeze([]),
+    intensity: 0,
+    lightning: Object.freeze({ intensity: 0, x: 0.5, y: 0.1 }),
+  }),
+});
+
 export function createRain({ rng = Math.random } = {}) {
   let enabled = false;
   let nextDropAt = -Infinity;
@@ -262,13 +273,24 @@ export function createRain({ rng = Math.random } = {}) {
       };
     },
 
-    step(dt, nowMs, camera, aspect, pool, swellTime) {
+    step(dt, nowMs, camera, aspect, pool, swellTime, mvpOverride = null) {
+      if (
+        !enabled
+        && ambientAlpha === 0
+        && fallingDrops.length === 0
+        && splashes.length === 0
+        && !activeLightning
+        && !pendingThunder
+      ) {
+        return IDLE_RAIN_FRAME;
+      }
+
       const safeDt = Math.min(0.05, Math.max(0, dt || 0));
       const fadeRate = enabled ? 3.2 : 2.6;
       ambientAlpha += ((enabled ? 1 : 0) - ambientAlpha) * Math.min(1, safeDt * fadeRate);
       if (!enabled && ambientAlpha < 0.005) ambientAlpha = 0;
 
-      const mvp = buildMvp(camera, aspect);
+      const mvp = mvpOverride || buildMvp(camera, aspect);
       const windX = RAIN.windX ?? -0.06;
       const windZ = RAIN.windZ ?? 0.02;
 

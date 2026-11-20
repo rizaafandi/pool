@@ -38,7 +38,6 @@ function petalCountForKind(kind, rng) {
 
 export function createFloaters({
   count = FLOATERS.count,
-  maxCount = FLOATERS.maxCount,
   positions = DEFAULT_POSITIONS,
   rng = Math.random,
 } = {}) {
@@ -72,14 +71,6 @@ export function createFloaters({
 
   function spawnDroppedPetal(options = {}) {
     enabled = true;
-    if (maxCount > 0 && items.length >= maxCount) {
-      const restingIdx = items.findIndex((item) => !item.falling);
-      if (restingIdx >= 0) {
-        items.splice(restingIdx, 1);
-      } else {
-        items.shift();
-      }
-    }
 
     const kind = options.kind || pickRandomKind(rng);
     const isLight = kind === 'petal' || kind === 'leaf';

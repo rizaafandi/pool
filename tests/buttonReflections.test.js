@@ -134,6 +134,33 @@ describe('createButtonReflectionTracker', () => {
     expect(out.cssPills[1].radius).toBe(18); // clamped to height / 2
     expect(out.meta[6]).toBeCloseTo(27, 4); // 18 * 1.5 DPR
   });
+
+  it('caches getBoundingClientRect across frames until invalidate() is called', () => {
+    const tracker = createButtonReflectionTracker();
+    let reads = 0;
+    let rect = { left: 20, top: 14, width: 80, height: 32 };
+    const btn = makeElement({ classes: ['pill'] });
+    btn.getBoundingClientRect = () => {
+      reads += 1;
+      return rect;
+    };
+
+    const f1 = tracker.collect([btn], canvasRect, 1000, 600, 1 / 60);
+    const f2 = tracker.collect([btn], canvasRect, 1000, 600, 1 / 60);
+    const f3 = tracker.collect([btn], canvasRect, 1000, 600, 1 / 60);
+    expect(reads).toBe(1);
+    expect(f1.cssPills[0].width).toBe(80);
+    expect(f2.cssPills[0].width).toBe(80);
+    expect(f3.cssPills[0].width).toBe(80);
+
+    // Changing rect without invalidate keeps cached geometry; invalidate refreshes it
+    rect = { left: 40, top: 14, width: 120, height: 32 };
+    tracker.invalidate();
+    const f4 = tracker.collect([btn], canvasRect, 1000, 600, 1 / 60);
+    expect(reads).toBe(2);
+    expect(f4.cssPills[0].x).toBe(40);
+    expect(f4.cssPills[0].width).toBe(120);
+  });
 });
 
 describe('themeCssVars', () => {

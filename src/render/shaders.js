@@ -323,29 +323,65 @@ float koiNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+float koiSpineOffset(float u, float phase, float bend) {
+  // True subcarangiform traveling wave: subtle head counter-yaw, fluid muscular tail whip
+  float headYaw = sin(phase + 0.55) * 0.010 * smoothstep(0.06, 0.47, u);
+  float bodyT = clamp((0.36 - u) / 0.98, 0.0, 1.0);
+  float wave = sin(u * 7.8 + phase) * (0.004 + 0.124 * bodyT * bodyT);
+  float du = u - 0.16;
+  float curve = bend * du * du * (1.35 + 0.45 * bodyT);
+  return wave + headYaw + curve;
+}
+
+float koiSpineSlope(float u, float phase, float bend) {
+  return (koiSpineOffset(u + 0.02, phase, bend) - koiSpineOffset(u - 0.02, phase, bend)) * 25.0;
+}
+
 vec2 koiLocal(vec2 worldXZ, vec2 centerXZ, float heading, float len, float phase, float bend) {
   vec2 d = worldXZ - centerXZ;
   float ch = cos(heading);
   float sh = sin(heading);
   vec2 loc = vec2(d.x * ch + d.y * sh, -d.x * sh + d.y * ch) / max(len, 0.05);
-  // Natural S-curve carangiform swimming wave: steady head, fluid tail propulsion
-  float tailT = clamp((0.34 - loc.x) / 1.02, 0.0, 1.0);
-  float wave = sin(loc.x * 8.6 + phase) * (0.005 + 0.118 * tailT * tailT);
-  float curve = bend * (loc.x - 0.18) * (loc.x - 0.18) * 1.45;
-  loc.y -= (wave + curve);
+  loc.y -= koiSpineOffset(loc.x, phase, bend);
   return loc;
 }
 
 float koiBodyHalfWidth(float u) {
-  // Sleek natural koi torpedo profile: pointed-oval snout at +0.48, broad shoulders at +0.20, slender peduncle at -0.34
-  if (u >= 0.48 || u <= -0.35) return 0.0;
-  float t = clamp((u + 0.35) / 0.83, 0.0, 1.0);
-  float nose = pow(max(1.0 - t, 0.0), 0.56);
-  float taper = pow(max(t, 0.0), 1.38);
-  float profile = 0.385 * nose * taper;
-  // Keep a slender muscular peduncle just ahead of the tail fin
-  float peduncle = 0.020 * smoothstep(-0.35, -0.28, u) * smoothstep(0.05, -0.25, u);
+  // Authentic mature Nishikigoi confirmation: softly rounded U-snout at +0.475,
+  // broad rounded shoulders at +0.16..+0.26, muscular taper into slender caudal peduncle at -0.34
+  if (u >= 0.478 || u <= -0.35) return 0.0;
+  float t = clamp((u + 0.35) / 0.828, 0.0, 1.0);
+  float nose = pow(max(1.0 - t, 0.0001), 0.48);
+  float taper = pow(max(t, 0.0001), 1.32);
+  float sDu = (u - 0.18) / 0.16;
+  float shoulder = 1.0 + 0.10 * exp(-sDu * sDu);
+  float profile = 0.355 * nose * taper * shoulder;
+  // Muscular caudal peduncle leading smoothly into the tail fin root
+  float peduncle = 0.025 * smoothstep(-0.35, -0.27, u) * smoothstep(0.04, -0.24, u);
   return max(profile, peduncle);
+}
+
+// Imbricated roof-tile fish scales mapped around the cylindrical dorsal body.
+// Returns vec4(edgeDark, centerDome, normalTiltU, normalTiltV)
+vec4 koiScales(float u, float cylV) {
+  vec2 g = vec2(u * 30.0, cylV * 14.5);
+  float row = floor(g.x);
+  vec2 f0 = fract(vec2(g.x, g.y + mod(row, 2.0) * 0.5));
+  vec2 f1 = fract(vec2(g.x + 0.5, g.y + mod(row + 1.0, 2.0) * 0.5));
+
+  // Rearward semicircular scale arc (scales overlap front-over-back)
+  vec2 c0 = vec2(f0.x - 0.82, f0.y - 0.5);
+  vec2 c1 = vec2(f1.x - 0.82, f1.y - 0.5);
+  float d0 = length(c0 * vec2(1.15, 1.05));
+  float d1 = length(c1 * vec2(1.15, 1.05));
+
+  bool pick0 = d0 < d1;
+  float d = pick0 ? d0 : d1;
+  vec2 cv = pick0 ? c0 : c1;
+
+  float edgeDark = smoothstep(0.36, 0.56, d) * smoothstep(0.68, 0.54, d);
+  float centerDome = smoothstep(0.58, 0.14, d);
+  return vec4(edgeDark, centerDome, cv.x, cv.y);
 }
 
 float koiFloorShadow(vec2 floorXZ) {
@@ -359,161 +395,280 @@ float koiFloorShadow(vec2 floorXZ) {
     float hAboveFloor = max(0.02, kp.y - u_floorY);
     vec2 sCenter = kp.xz - u_sunDir.xz * (hAboveFloor / sunY);
     vec2 delta = floorXZ - sCenter;
-    float maxR = km.x * 0.84;
+    float maxR = km.x * 0.88;
     if (dot(delta, delta) > maxR * maxR) continue;
     vec2 loc = koiLocal(floorXZ, sCenter, kp.w, km.x, km.y, km.z);
-    float blur = 0.038 + hAboveFloor * 0.20;
+    float av = abs(loc.y);
+    float blur = 0.036 + hAboveFloor * 0.19;
     float hw = koiBodyHalfWidth(loc.x);
-    float inLen = smoothstep(-0.66 - blur, -0.34, loc.x) * smoothstep(0.49 + blur, 0.36, loc.x);
-    float tailW = mix(hw, 0.145, smoothstep(-0.28, -0.58, loc.x));
-    float bodyM = smoothstep(tailW + blur, tailW - blur * 0.45, abs(loc.y)) * inLen;
-    float depthFade = clamp(1.0 - hAboveFloor * 1.10, 0.42, 0.94);
-    shadow = max(shadow, bodyM * 0.52 * depthFade);
+
+    // Body + caudal shadow
+    float inLen = smoothstep(-0.67 - blur, -0.33, loc.x) * smoothstep(0.49 + blur, 0.36, loc.x);
+    float tT = clamp((-0.29 - loc.x) / 0.38, 0.0, 1.0);
+    float tailW = mix(hw, 0.165 * sin(min(1.0, tT * 1.15) * 1.5708), smoothstep(-0.26, -0.56, loc.x));
+    float bodyM = smoothstep(tailW + blur, tailW - blur * 0.45, av) * inLen;
+
+    // Soft pectoral fin shadow pads extending from the shoulders
+    float pecU = loc.x - (0.16 - av * 0.48);
+    float pecV = av - (hw * 0.65 + 0.105);
+    float pecR = length(vec2(pecU / 0.13, pecV / 0.11));
+    float pecM = smoothstep(1.08 + blur * 2.0, 0.45, pecR) * smoothstep(0.32, 0.20, loc.x) * 0.55;
+
+    float depthFade = clamp(1.0 - hAboveFloor * 1.08, 0.42, 0.94);
+    shadow = max(shadow, max(bodyM, pecM) * 0.54 * depthFade);
   }
   return shadow;
 }
 
 vec4 sampleKoi(vec2 worldXZ, vec4 kp, vec4 km, vec3 sunWebRgb, vec3 prismCaustic) {
   vec2 delta = worldXZ - kp.xz;
-  float maxR = km.x * 0.86;
+  float maxR = km.x * 0.88;
   if (dot(delta, delta) > maxR * maxR) return vec4(0.0);
 
   vec2 loc = koiLocal(worldXZ, kp.xz, kp.w, km.x, km.y, km.z);
   float u = loc.x;
   float v = loc.y;
   float av = abs(v);
+  float sideSign = v >= 0.0 ? 1.0 : -1.0;
 
-  // Smooth sleek torpedo body silhouette
+  float variant = floor(km.w + 0.001);
+  float seed = fract(km.w) * 19.7;
+
+  // Smooth anatomical Nishikigoi torpedo body silhouette
   float hw = koiBodyHalfWidth(u);
   float bodyDist = av - hw;
-  float bodyAlpha = smoothstep(0.0085, -0.0065, bodyDist)
-    * smoothstep(0.482, 0.455, u)
-    * smoothstep(-0.352, -0.315, u);
+  float bodyAlpha = smoothstep(0.0075, -0.0060, bodyDist)
+    * smoothstep(0.480, 0.458, u)
+    * smoothstep(-0.352, -0.318, u);
 
-  // Seamlessly attached wide fan-shaped pectoral fins emerging from behind the gill cover
-  float finRow = sin(km.y * 0.55) * 0.018;
-  float pecU = u - (0.20 - av * 0.52 + finRow * 0.5);
-  float pecV = av - (hw * 0.62 + 0.095);
-  vec2 pecEll = vec2(pecU / 0.125, pecV / 0.115);
-  float pecR = length(pecEll);
-  float pecAngle = atan(av - hw * 0.45, max(0.01, 0.29 - u));
-  float pecRays = 0.86 + 0.14 * sin(pecAngle * 28.0);
-  float pecLead = smoothstep(0.18, 0.26, u) * smoothstep(0.31, 0.24, u);
-  float pecAlpha = smoothstep(1.04, 0.54, pecR)
-    * smoothstep(hw * 0.40, hw * 0.82, av)
-    * smoothstep(0.31, 0.22, u)
-    * (mix(0.82, 0.42, clamp(pecR, 0.0, 1.0)) + pecLead * 0.12) * pecRays;
+  // Graceful teardrop/paddle pectoral fins (Munabire) with independent sculling & turn flare
+  float scull = sin(km.y * 0.52 + sideSign * 0.55) * 0.015;
+  float turnFlare = clamp(-km.z * sideSign * 0.08, -0.018, 0.030);
+  float pecOriginU = 0.245;
+  float pecOriginV = max(hw * 0.68, 0.088);
+  float pecDu = pecOriginU - u;
+  float pecDv = av - pecOriginV;
+  // Swept paddle coordinates: curves cleanly backward with a rounded outer lobe
+  float sweepU = pecDu - pecDv * (0.72 + scull * 3.5);
+  float pecReach = 0.145 + turnFlare;
+  float pecNormV = clamp(pecDv / max(pecReach, 0.05), 0.0, 1.3);
+  float pecChord = mix(0.075, 0.142, sin(min(1.0, pecNormV * 1.08) * 3.14159)) * smoothstep(1.12, 0.72, pecNormV);
+  float pecCenter = 0.032 + pecNormV * 0.055;
+  float pecDist = abs(sweepU - pecCenter) - pecChord * 0.55;
+  float pecEnv = smoothstep(0.012, -0.010, pecDist)
+    * smoothstep(0.0, 0.026, pecDv + 0.018)
+    * smoothstep(1.06, 0.82, pecNormV)
+    * smoothstep(0.285, 0.225, u);
+  float pecAngle = atan(max(0.001, pecDv + 0.02), max(0.01, pecDu + 0.04));
+  // Fine branching radial fin rays + opaque curved leading bone ray
+  float pecRayA = 0.5 + 0.5 * sin(pecAngle * 34.0);
+  float pecRayB = 0.5 + 0.5 * sin(pecAngle * 68.0 + 0.8);
+  float pecRays = 0.78 + 0.15 * pecRayA + 0.07 * pecRayB * smoothstep(0.35, 0.85, pecNormV);
+  float pecLeadEdge = smoothstep(0.022, 0.002, abs(sweepU - (pecCenter - pecChord * 0.48))) * pecEnv * smoothstep(0.95, 0.15, pecNormV);
+  float pecAlpha = pecEnv * (mix(0.84, 0.30, pow(max(clamp(pecNormV, 0.0, 1.0), 0.0001), 0.85)) * pecRays + pecLeadEdge * 0.24);
+  pecAlpha = clamp(pecAlpha, 0.0, 0.94);
 
-  // Smaller swept pelvic fins tucked mid-body
-  float pelvU = u - (-0.04 - av * 0.46);
-  float pelvV = av - (hw * 0.62 + 0.056);
-  float pelvR = length(vec2(pelvU / 0.078, pelvV / 0.068));
-  float pelvAlpha = smoothstep(1.02, 0.52, pelvR)
-    * smoothstep(hw * 0.45, hw * 0.82, av)
-    * mix(0.68, 0.30, clamp(pelvR, 0.0, 1.0));
+  // Swept translucent pelvic fins (Harabire) tucked mid-body
+  float pelvDu = -0.02 - u;
+  float pelvDv = av - max(hw * 0.60, 0.058);
+  float pelvSweep = pelvDu - pelvDv * 0.78;
+  float pelvNormV = clamp(pelvDv / 0.088, 0.0, 1.3);
+  float pelvChord = 0.086 * sin(min(1.0, pelvNormV * 1.1) * 3.14159);
+  float pelvEnv = smoothstep(0.010, -0.008, abs(pelvSweep - 0.025) - pelvChord * 0.5)
+    * smoothstep(0.0, 0.020, pelvDv + 0.014)
+    * smoothstep(1.05, 0.78, pelvNormV);
+  float pelvAngle = atan(max(0.001, pelvDv + 0.015), max(0.01, pelvDu + 0.03));
+  float pelvRays = 0.84 + 0.16 * sin(pelvAngle * 28.0);
+  float pelvAlpha = pelvEnv * mix(0.68, 0.24, clamp(pelvNormV, 0.0, 1.0)) * pelvRays;
 
-  // Long graceful deeply-forked swallowtail caudal fin with fine fin rays
-  float tailT = clamp((-0.29 - u) / 0.38, 0.0, 1.0);
-  float tailHalfW = mix(0.018, 0.198, pow(tailT, 0.74));
-  float lobeNorm = clamp(av / max(tailHalfW, 0.01), 0.0, 1.0);
-  // Swept pointed tips + deep V-notch fork in the center
-  float forkCut = -0.66 + pow(1.0 - lobeNorm, 1.35) * 0.195;
-  float tailIn = smoothstep(-0.27, -0.33, u) * smoothstep(forkCut - 0.012, forkCut + 0.026, u);
-  float tailEdge = smoothstep(tailHalfW + 0.010, tailHalfW - 0.009, av);
-  float tailRays = 0.84 + 0.16 * sin(lobeNorm * 26.0 + tailT * 2.5);
-  float tailAlpha = tailIn * tailEdge * mix(0.86, 0.46, tailT) * tailRays;
+  // Flowing silk-like caudal tail fin (Obire) with rounded lobes, lunate fork & trailing phase lag
+  float tailT = clamp((-0.29 - u) / 0.39, 0.0, 1.0);
+  // Subtle delayed silk whip in the translucent tail membrane
+  float tailSilkLag = sin(u * 7.0 + km.y - 0.75) * 0.024 * tailT * tailT;
+  float vTail = v - tailSilkLag;
+  float avTail = abs(vTail);
+  // Rounded upper/lower lobe outer sweep (fuller, graceful curve rather than rigid triangle)
+  float tailHalfW = mix(0.022, 0.205, pow(max(tailT, 0.0001), 0.68)) * (1.0 - 0.10 * smoothstep(0.72, 1.0, tailT));
+  float lobeNorm = clamp(avTail / max(tailHalfW, 0.012), 0.0, 1.0);
+  // Smooth rounded lobe tips peaking near lobeNorm = 0.72 with a graceful lunate center cleft
+  float lobeArch = sin(pow(max(lobeNorm, 0.0001), 0.78) * 3.14159);
+  float forkCut = -0.525 - 0.155 * pow(max(lobeArch, 0.0001), 0.72);
+  float tailIn = smoothstep(-0.275, -0.335, u) * smoothstep(forkCut - 0.014, forkCut + 0.024, u);
+  float tailEdge = smoothstep(tailHalfW + 0.010, tailHalfW - 0.008, avTail);
+  float tailRayA = 0.5 + 0.5 * sin(lobeNorm * 28.0 + tailT * 2.2);
+  float tailRayB = 0.5 + 0.5 * sin(lobeNorm * 56.0 - tailT * 1.4);
+  float tailRays = 0.78 + 0.15 * tailRayA + 0.07 * tailRayB * smoothstep(0.35, 0.90, tailT);
+  float tailOuterLead = smoothstep(0.78, 0.96, lobeNorm) * tailEdge * tailIn * smoothstep(0.92, 0.15, tailT);
+  float tailAlpha = tailIn * tailEdge * (mix(0.88, 0.32, pow(max(tailT, 0.0001), 0.85)) * tailRays + tailOuterLead * 0.16);
+  tailAlpha = clamp(tailAlpha, 0.0, 0.94);
 
-  // Delicate barbels (tiny whiskers) near tip of snout
-  float barbD = length(vec2((u - 0.458) * 1.7, av - 0.036));
-  float barbAlpha = smoothstep(0.018, 0.007, barbD) * 0.55;
+  // Delicate curved whisker barbels (Hige) sweeping gracefully back from the corners of the mouth
+  float barbT = clamp((0.468 - u) / 0.056, 0.0, 1.0);
+  float barbCurveV = 0.030 + pow(max(barbT, 0.0001), 0.78) * 0.036 + sin(km.y * 0.6 + sideSign) * 0.004 * barbT;
+  float barbIn = smoothstep(0.472, 0.460, u) * smoothstep(0.405, 0.422, u);
+  float barbThick = mix(0.0065, 0.0022, barbT);
+  float barbAlpha = smoothstep(barbThick + 0.004, barbThick * 0.35, abs(av - barbCurveV)) * barbIn * 0.68;
 
-  // Sculpted dorsal fin ribbon swaying subtly along the spine
-  float dorsalLen = smoothstep(-0.26, -0.15, u) * smoothstep(0.18, 0.06, u);
-  float dorsalWave = sin(u * 10.0 + km.y - 0.4) * 0.012;
-  float dorsalLine = smoothstep(0.014, 0.0025, abs(v - dorsalWave)) * dorsalLen;
-  float dorsalSideShadow = smoothstep(0.030, 0.004, abs(v - dorsalWave - 0.012)) * dorsalLen;
+  // Sculpted translucent dorsal fin ribbon swaying along the spine + sun-projected shadow onto back
+  float dorsalLen = smoothstep(-0.25, -0.14, u) * smoothstep(0.17, 0.05, u);
+  float dorsalWave = sin(u * 9.5 + km.y - 0.55) * 0.014 - km.z * 0.038 * dorsalLen;
+  float dorsalRibbon = smoothstep(0.017, 0.0025, abs(v - dorsalWave)) * dorsalLen;
+  float dorsalRays = 0.82 + 0.18 * sin(u * 135.0);
+  float dorsalLine = dorsalRibbon * dorsalRays;
+
+  // Project sun direction into koi's local lateral axis for accurate dorsal shadow direction
+  float ch0 = cos(kp.w);
+  float sh0 = sin(kp.w);
+  float sunLat = -u_sunDir.x * sh0 + u_sunDir.z * ch0;
+  float dorsalShOff = -clamp(sunLat, -0.8, 0.8) * 0.022;
+  float dorsalSideShadow = smoothstep(0.026, 0.004, abs(v - dorsalWave - dorsalShOff)) * dorsalLen;
 
   float finAlpha = max(max(pecAlpha, pelvAlpha), max(tailAlpha, barbAlpha));
   float totalAlpha = clamp(max(bodyAlpha, finAlpha), 0.0, 1.0);
   if (totalAlpha < 0.005) return vec4(0.0);
 
+  // Cylindrical lateral wrap for realistic foreshortened scales & 3D shading
+  float flank = clamp(v / max(hw, 0.015), -1.0, 1.0);
+  float dorsalZ = sqrt(max(0.05, 1.0 - flank * flank * 0.93));
+  float cylV = asin(clamp(flank, -0.98, 0.98)) * 0.64;
+
+  // Imbricated roof-tile fish scales across the torso (cleanly stopping at the curved operculum gill line)
+  float gillCurveU = 0.242 - av * av * 1.75;
+  float torsoMask = smoothstep(gillCurveU + 0.020, gillCurveU - 0.035, u) * smoothstep(-0.33, -0.20, u);
+  vec4 scaleData = koiScales(u, cylV);
+  float scaleEdge = scaleData.x * torsoMask;
+  float scaleCenter = scaleData.y * torsoMask;
+
   // All koi pigments in TRUE LINEAR LIGHT SPACE (WATER_FS applies filmic curve + gamma 1/2.15)
-  float variant = floor(km.w + 0.001);
-  float seed = fract(km.w) * 19.7;
-  vec2 nCoord = vec2(u * 4.2 + seed, v * 5.2 - seed * 0.65);
+  vec2 nCoord = vec2(u * 4.0 + seed, cylV * 3.4 - seed * 0.65);
   float patchA = koiNoise(nCoord) * 0.68 + koiNoise(nCoord * 2.15 + 3.1) * 0.32;
   float patchB = koiNoise(nCoord * 1.65 + vec2(6.7, -3.9)) * 0.72 + koiNoise(nCoord * 3.1 - 2.2) * 0.28;
+  // Scale-modulated pigment boundary: mimics authentic Kiwa (scale-following edge) & Sashi
+  float scaleMod = (scaleCenter - 0.45) * 0.048 * torsoMask;
 
-  vec3 pureWhite = vec3(0.84, 0.87, 0.90);
-  vec3 orangeRed = vec3(0.92, 0.125, 0.008);
-  vec3 orangeDeep = vec3(0.76, 0.075, 0.004);
-  vec3 butterGold = vec3(0.74, 0.54, 0.060);
-  vec3 goldBright = vec3(0.94, 0.78, 0.145);
-  vec3 sumiBlack = vec3(0.009, 0.012, 0.017);
+  vec3 pureWhite = vec3(0.86, 0.88, 0.90);
+  vec3 warmIvory = vec3(0.88, 0.84, 0.78);
+  vec3 orangeRed = vec3(0.94, 0.115, 0.007);
+  vec3 orangeDeep = vec3(0.72, 0.052, 0.003);
+  vec3 butterGold = vec3(0.72, 0.50, 0.048);
+  vec3 goldBright = vec3(0.96, 0.80, 0.145);
+  vec3 sumiBlack = vec3(0.008, 0.010, 0.015);
 
   vec3 albedo = pureWhite;
-  vec3 finCol = vec3(0.82, 0.87, 0.91);
-  vec3 dorsalCol = vec3(0.45, 0.52, 0.58);
+  vec3 finCol = vec3(0.84, 0.88, 0.91);
+  vec3 dorsalCol = vec3(0.56, 0.62, 0.68);
+  vec3 irisCol = vec3(0.64, 0.54, 0.28);
+  float ginrin = 0.0;
 
   if (variant < 0.5) {
-    // 0: Platinum Ogon (pure porcelain white)
-    albedo = pureWhite;
-    finCol = vec3(0.84, 0.89, 0.93);
-    dorsalCol = vec3(0.42, 0.49, 0.56);
+    // 0: Platinum Ogon (luminous porcelain-silver white with subtle pearlescent Ginrin scale luster)
+    albedo = mix(pureWhite, vec3(0.92, 0.94, 0.97), scaleCenter * 0.35);
+    albedo *= 1.0 - scaleEdge * 0.11;
+    finCol = vec3(0.86, 0.90, 0.94);
+    dorsalCol = vec3(0.52, 0.58, 0.65);
+    irisCol = vec3(0.70, 0.74, 0.78);
+    ginrin = 0.42;
   } else if (variant < 1.5) {
-    // 1: Kohaku (crisp snowy white + vibrant orange-red dorsal saddles)
-    float hi = smoothstep(0.44, 0.485, patchA) * smoothstep(-0.32, -0.18, u);
-    vec3 hiCol = mix(orangeDeep, orangeRed, smoothstep(0.48, 0.70, patchA));
-    albedo = mix(pureWhite, hiCol, hi);
-    finCol = vec3(0.82, 0.87, 0.91);
-    dorsalCol = mix(vec3(0.46, 0.52, 0.58), vec3(0.54, 0.04, 0.005), hi);
+    // 1: Kohaku (pure Shiroji porcelain white + deep scarlet-vermilion Hi saddles with scale-edged Kiwa)
+    float sashi = smoothstep(0.41, 0.48, patchA + scaleMod * 0.6) * smoothstep(-0.32, -0.18, u);
+    float hi = smoothstep(0.445, 0.478, patchA + scaleMod) * smoothstep(-0.32, -0.18, u);
+    // Subtle occasional Tancho forehead crown marking on some Kohaku seeds
+    float tanchoSeed = step(0.62, fract(seed * 0.37));
+    float tancho = tanchoSeed * smoothstep(0.072, 0.052, length(vec2((u - 0.335) * 1.15, v * 1.25)));
+    hi = max(hi, tancho);
+    vec3 hiCol = mix(orangeDeep, orangeRed, smoothstep(0.46, 0.72, patchA) * 0.72 + scaleCenter * 0.28);
+    vec3 shiroji = mix(pureWhite, warmIvory, 0.15 * (1.0 - dorsalZ));
+    // Soft Sashi under-scale coral blush right ahead of solid Hi patches
+    albedo = mix(shiroji, mix(shiroji, orangeRed, 0.28), clamp(sashi - hi, 0.0, 1.0) * 0.55);
+    albedo = mix(albedo, hiCol, hi);
+    albedo *= 1.0 - scaleEdge * mix(0.10, 0.16, hi);
+    finCol = vec3(0.84, 0.88, 0.91);
+    dorsalCol = mix(vec3(0.54, 0.60, 0.66), vec3(0.62, 0.045, 0.005), hi);
+    irisCol = vec3(0.72, 0.52, 0.22);
+    ginrin = 0.14;
   } else if (variant < 2.5) {
-    // 2: Yamabuki Ogon (rich golden-yellow with warm metallic sheen & translucent gold fins)
-    float sheen = smoothstep(0.28, 0.76, patchA);
-    albedo = mix(butterGold, goldBright, sheen * 0.52 + (1.0 - clamp(av / max(hw, 0.02), 0.0, 1.0)) * 0.34);
-    finCol = vec3(0.82, 0.68, 0.14);
-    dorsalCol = vec3(0.32, 0.24, 0.03);
+    // 2: Yamabuki Ogon (metallic honey-gold with prominent reticulated Fukurin scale mesh)
+    float sheen = smoothstep(0.26, 0.78, patchA);
+    vec3 fukurinEdge = vec3(0.50, 0.30, 0.022);
+    albedo = mix(butterGold, goldBright, sheen * 0.42 + dorsalZ * 0.34 + scaleCenter * 0.24);
+    albedo = mix(albedo, fukurinEdge, scaleEdge * 0.34);
+    finCol = vec3(0.84, 0.68, 0.15);
+    dorsalCol = vec3(0.44, 0.32, 0.04);
+    irisCol = vec3(0.86, 0.70, 0.20);
+    ginrin = 0.55;
   } else {
-    // 3: Showa / Hi Utsuri (vivid orange-red + deep velvety sumi-black bands + crisp white accents)
-    float blackPatch = smoothstep(0.50, 0.545, patchB) * smoothstep(-0.28, -0.12, u);
-    float whiteEdge = smoothstep(0.65, 0.70, patchA) * (1.0 - blackPatch) * smoothstep(0.26, -0.14, u);
-    vec3 hiCol = mix(orangeDeep, orangeRed, 0.65);
+    // 3: Showa / Sanke (deep lacquer Sumi-black + vivid Hi-vermilion + crisp Shiroji white + Motoguro fin roots)
+    float blackPatch = smoothstep(0.495, 0.532, patchB + scaleMod) * smoothstep(-0.29, -0.13, u);
+    float whiteEdge = smoothstep(0.635, 0.685, patchA + scaleMod) * (1.0 - blackPatch) * smoothstep(0.28, -0.14, u);
+    vec3 hiCol = mix(orangeDeep, orangeRed, 0.58 + scaleCenter * 0.26);
     albedo = mix(hiCol, pureWhite, whiteEdge * 0.94);
-    albedo = mix(albedo, sumiBlack, blackPatch * 0.97);
-    finCol = vec3(0.82, 0.87, 0.91);
-    dorsalCol = vec3(0.025, 0.030, 0.038);
+    albedo = mix(albedo, sumiBlack, blackPatch * 0.98);
+    albedo *= 1.0 - scaleEdge * mix(0.14, 0.05, blackPatch);
+    // Authentic Motoguro (dark sumi-black pigment at the base of the pectoral fins)
+    float motoguro = smoothstep(0.58, 0.16, pecNormV) * pecEnv;
+    finCol = mix(vec3(0.84, 0.88, 0.91), vec3(0.022, 0.026, 0.032), motoguro * 0.88);
+    dorsalCol = mix(vec3(0.03, 0.035, 0.042), vec3(0.54, 0.58, 0.64), whiteEdge * 0.6);
+    irisCol = vec3(0.68, 0.46, 0.18);
+    ginrin = 0.18;
   }
 
-  // Subtle diamond scale lattice across the torso (stops cleanly before head)
-  float torsoMask = smoothstep(0.24, 0.16, u) * smoothstep(-0.30, -0.18, u);
-  vec2 sc = vec2(u * 46.0, v * 58.0);
-  float scaleGrid = sin(sc.x + sc.y) * sin(sc.x - sc.y);
-  albedo *= 1.0 + scaleGrid * 0.055 * torsoMask;
+  // Smooth bony head anatomy: curved gill-cover (operculum) seam with gentle breathing rhythm
+  float breath = sin(u_time * 3.0 + seed) * 0.003;
+  float gillArc = abs(u - (gillCurveU + breath));
+  float gillShade = smoothstep(0.017, 0.0025, gillArc) * smoothstep(0.025, 0.075, av) * bodyAlpha;
+  float gillLip = smoothstep(0.010, 0.002, abs(u - (gillCurveU + breath + 0.009))) * smoothstep(0.03, 0.08, av) * bodyAlpha;
+  albedo = mix(albedo, albedo * vec3(0.58, 0.44, 0.44), gillShade * 0.42);
+  albedo *= 1.0 + gillLip * 0.07;
 
-  // Subtle curved gill-cover (operculum) crease separating head from torso
-  float gillArc = abs((u - 0.24) + av * av * 1.8);
-  float gillShade = smoothstep(0.016, 0.003, gillArc) * smoothstep(0.02, 0.07, av) * bodyAlpha;
-  albedo *= (1.0 - gillShade * 0.24);
+  // Subtle crescent mouth shadow at tip of snout & tiny paired nostril pits (nares)
+  float mouthArc = abs((u - 0.468) + av * av * 6.5);
+  float mouthShade = smoothstep(0.008, 0.002, mouthArc) * smoothstep(0.042, 0.022, av) * bodyAlpha;
+  albedo *= (1.0 - mouthShade * 0.32);
 
-  // Recessed glossy jet-black eyes with tiny white specular catchlight
-  vec2 eyeDelta = vec2(u - 0.365, av - (hw * 0.78));
-  float eyeMask = smoothstep(0.021, 0.010, length(eyeDelta)) * bodyAlpha;
-  float eyeGlint = smoothstep(0.007, 0.002, length(eyeDelta - vec2(0.005, -0.004))) * eyeMask;
-  albedo = mix(albedo, vec3(0.003, 0.004, 0.006), eyeMask);
+  vec2 nareDelta = vec2((u - 0.422) * 1.4, (av - hw * 0.42) * 1.1);
+  float nareMask = smoothstep(0.009, 0.003, length(nareDelta)) * bodyAlpha;
+  albedo *= (1.0 - nareMask * 0.38);
 
-  // Rich 3D cylindrical dorsal normal shading + wet specular sheen
-  float flank = clamp(v / max(hw, 0.015), -1.0, 1.0);
-  float dorsalZ = sqrt(max(0.06, 1.0 - flank * flank * 0.92));
-  float ch = cos(kp.w);
-  float sh = sin(kp.w);
-  vec3 fishN = normalize(vec3(-sh * flank * 0.78, dorsalZ, ch * flank * 0.78));
+  // Anatomical lateral eyes: dark socket rim, metallic iris ring, glossy jet-black pupil, crisp catchlight
+  vec2 eyeCenter = vec2(0.362, hw * 0.80);
+  vec2 eyeDelta = vec2(u - eyeCenter.x, av - eyeCenter.y);
+  float eyeDist = length(eyeDelta * vec2(1.0, 1.15));
+  float eyeSocket = smoothstep(0.028, 0.017, eyeDist) * bodyAlpha;
+  float eyeIris = smoothstep(0.022, 0.015, eyeDist) * bodyAlpha;
+  float eyePupil = smoothstep(0.014, 0.0085, eyeDist) * bodyAlpha;
+  float eyeGlint = smoothstep(0.0055, 0.0015, length(eyeDelta - vec2(0.0045, -0.0035))) * eyePupil;
+  albedo *= (1.0 - eyeSocket * 0.25);
+  albedo = mix(albedo, irisCol, eyeIris * 0.88);
+  albedo = mix(albedo, vec3(0.003, 0.004, 0.006), eyePupil);
+
+  // Curved 3D dorsal normal accounting for live swimming S-curve + longitudinal slope + scale micro-normals
+  float slopeY = koiSpineSlope(u, km.y, km.z);
+  float localHeading = kp.w + atan(clamp(slopeY, -0.65, 0.65));
+  float ch = cos(localHeading);
+  float sh = sin(localHeading);
+  float longTilt = clamp((u - 0.14) * 0.45, -0.22, 0.32) * smoothstep(0.32, 0.48, u)
+    - 0.14 * smoothstep(-0.10, -0.35, u);
+  float sTiltU = scaleData.z * 0.24 * torsoMask;
+  float sTiltV = scaleData.w * 0.22 * torsoMask;
+  vec3 locN = normalize(vec3(longTilt + sTiltU, dorsalZ, flank * 0.84 + sTiltV));
+  vec3 fishN = normalize(vec3(
+    ch * locN.x - sh * locN.z,
+    locN.y,
+    sh * locN.x + ch * locN.z
+  ));
+
   vec3 sunL = normalize(u_sunDir);
   float ndl = max(dot(fishN, sunL), 0.0);
-  // Crisp flank roll-off gives convincing round 3D volume from top-down view
-  float edgeAO = mix(0.48, 1.0, pow(dorsalZ, 0.55));
-  float diffuse = mix(0.32, 1.12, ndl) * edgeAO;
+  float edgeAO = mix(0.42, 1.0, pow(dorsalZ, 0.58));
+  float diffuse = mix(0.28, 1.14, ndl) * edgeAO;
+
+  // Glossy wet mucus specular + subtle metallic Ginrin scale sparkle along curved back
   vec3 wetH = normalize(sunL + vec3(0.0, 0.92, 0.38));
-  float wetSpec = pow(max(dot(fishN, wetH), 0.0), 42.0) * 0.28 * bodyAlpha;
+  float ndh = max(dot(fishN, wetH), 0.0001);
+  float wetSpec = pow(ndh, 52.0) * 0.30 * bodyAlpha;
+  float ginrinSparkle = pow(ndh, 18.0) * scaleCenter * ginrin * 0.34 * bodyAlpha;
+  // Soft warm translucent subsurface rim glow along thin flanks
+  float flankSSS = pow(max(1.0 - dorsalZ, 0.0001), 2.2) * (0.35 + 0.65 * ndl) * 0.16;
 
   float nightFactor = clamp(u_nightGlow * (1.0 - u_biolum * 0.65), 0.0, 1.0);
   float moonAmbient = mix(1.0, 0.18, nightFactor);
@@ -521,17 +676,19 @@ vec4 sampleKoi(vec2 worldXZ, vec4 kp, vec4 km, vec3 sunWebRgb, vec3 prismCaustic
   vec3 sunlitCaustic = mix(u_causticTint, u_sunColor, 0.50);
   vec3 moodTint = mix(vec3(1.0), u_sunColor, 0.24 + nightFactor * 0.28);
 
-  vec3 bodyLit = albedo * diffuse * moodTint * moonAmbient;
-  bodyLit += u_sunColor * (wetSpec + eyeGlint * 0.55) * (1.0 - u_rain * 0.5) * mix(1.0, 0.35, nightFactor);
+  vec3 bodyLit = albedo * (diffuse + flankSSS) * moodTint * moonAmbient;
+  bodyLit += u_sunColor * (wetSpec + ginrinSparkle + eyeGlint * 0.68) * (1.0 - u_rain * 0.45) * mix(1.0, 0.35, nightFactor);
 
-  // Sculpted dorsal fin ridge + soft cast shadow onto the back
-  bodyLit = mix(bodyLit, bodyLit * 0.58, dorsalSideShadow * 0.55 * bodyAlpha);
-  bodyLit = mix(bodyLit, dorsalCol * (0.65 + 0.45 * ndl) * moonAmbient, dorsalLine * 0.78 * bodyAlpha);
+  // Sculpted translucent dorsal fin ribbon + sun-aligned cast shadow onto curved back
+  bodyLit = mix(bodyLit, bodyLit * 0.54, dorsalSideShadow * 0.58 * bodyAlpha);
+  vec3 dorsalLit = dorsalCol * (0.62 + 0.48 * ndl) * moodTint * moonAmbient
+    + u_sunColor * 0.12 * dorsalLine * ndl * mix(1.0, 0.25, nightFactor);
+  bodyLit = mix(bodyLit, dorsalLit, dorsalLine * 0.74 * bodyAlpha);
 
   // Dancing underwater caustic filaments draped across the koi's curved back
   float causticNight = mix(1.0, 0.15, nightFactor);
-  bodyLit += sunlitCaustic * sunWebRgb * (0.24 * rainDim * causticNight) * (0.40 + 0.60 * ndl) * dorsalZ;
-  bodyLit += prismCaustic * (0.16 * causticNight) * dorsalZ;
+  bodyLit += sunlitCaustic * sunWebRgb * (0.26 * rainDim * causticNight) * (0.38 + 0.62 * ndl) * dorsalZ;
+  bodyLit += prismCaustic * (0.17 * causticNight) * dorsalZ;
 
   // Warm golden candlelight illuminating koi when swimming near floating water lanterns
   if (u_lanternCount > 0) {
@@ -549,10 +706,16 @@ vec4 sampleKoi(vec2 worldXZ, vec4 kp, vec4 km, vec3 sunWebRgb, vec3 prismCaustic
 
   if (u_biolum > 0.01) {
     vec3 bioGlow = mix(u_causticTint, vec3(0.55, 0.95, 1.0), 0.35);
-    bodyLit += bioGlow * u_biolum * (0.12 + dorsalLine * 0.28 + (1.0 - bodyAlpha) * 0.24);
+    bodyLit += bioGlow * u_biolum * (0.12 + dorsalLine * 0.28 + scaleEdge * 0.16 + (1.0 - bodyAlpha) * 0.26);
   }
 
-  vec3 finLit = finCol * (0.62 + 0.42 * ndl) * moodTint * moonAmbient + sunlitCaustic * sunWebRgb * (0.14 * causticNight);
+  // Fin shading: opaque bone leading ray, subtle dark socket AO at root, translucent backlit membrane
+  float finRootAO = mix(0.76, 1.0, smoothstep(0.0, 0.32, max(pecNormV, tailT)));
+  float finHighlight = max(pecLeadEdge * 0.24, tailOuterLead * 0.18);
+  vec3 finBase = mix(finCol, pureWhite, finHighlight * (variant < 2.5 && variant > 1.5 ? 0.25 : 0.70));
+  vec3 finLit = finBase * finRootAO * (0.58 + 0.48 * ndl) * moodTint * moonAmbient
+    + sunlitCaustic * sunWebRgb * (0.16 * causticNight)
+    + u_sunColor * (finHighlight * 0.18 * ndl * mix(1.0, 0.25, nightFactor));
   if (u_lanternCount > 0) {
     vec3 lanternFin = vec3(1.0, 0.58, 0.16);
     float lnBoost = 0.50 + 1.15 * max(nightFactor, u_biolum);
@@ -561,7 +724,7 @@ vec4 sampleKoi(vec2 worldXZ, vec4 kp, vec4 km, vec3 sunWebRgb, vec3 prismCaustic
       vec4 ln = u_lanterns[i];
       vec2 d = worldXZ - ln.xy;
       float kGlow = exp(-dot(d, d) * 5.2) * ln.z * lnBoost;
-      finLit += finCol * lanternFin * kGlow * 0.72;
+      finLit += finBase * lanternFin * kGlow * 0.72;
     }
   }
   vec3 finalCol = mix(finLit, bodyLit, bodyAlpha);
@@ -793,7 +956,7 @@ void main() {
     through = floorColor(hit.xz) * exp(-u_absorption * path * 1.15);
 
     if (u_koiCount > 0) {
-      vec3 koiAccum = vec3(0.0);
+      vec3 koiPremul = vec3(0.0);
       float koiAlpha = 0.0;
       float bestKoiT = 1e6;
       for (int i = 0; i < 12; i++) {
@@ -804,7 +967,7 @@ void main() {
         if (tk <= 0.0 || tk >= t) continue;
         vec3 khit = v_world + I * tk;
         vec2 kDelta = khit.xz - kp.xz;
-        float kMaxR = km.x * 0.86;
+        float kMaxR = km.x * 0.88;
         if (dot(kDelta, kDelta) > kMaxR * kMaxR) continue;
         vec2 kuv = clamp(khit.xz / (2.0 * u_half) + 0.5, 0.0, 1.0);
         vec3 kSimCaustic = clamp(sampleCausticSoft(kuv), 0.0, 1.0);
@@ -816,16 +979,24 @@ void main() {
           causticWeb(khit.xz - kDisp, u_time)
         );
         vec4 kSample = sampleKoi(khit.xz, kp, km, kSunWeb, kPrism);
-        if (kSample.a > 0.005 && tk < bestKoiT) {
+        if (kSample.a > 0.005) {
           float kPath = length(khit - v_world);
           vec3 kAtten = kSample.rgb * exp(-u_absorption * kPath * 0.72);
-          koiAccum = mix(koiAccum, kAtten, kSample.a);
-          koiAlpha = max(koiAlpha, kSample.a);
-          bestKoiT = tk;
+          float ka = kSample.a;
+          if (tk < bestKoiT) {
+            // Front-over-back premultiplied alpha compositing
+            koiPremul = kAtten * ka + koiPremul * (1.0 - ka);
+            koiAlpha = ka + koiAlpha * (1.0 - ka);
+            bestKoiT = tk;
+          } else {
+            // Back-under-front compositing so deeper koi stay visible beneath translucent fins
+            koiPremul = koiPremul + kAtten * ka * (1.0 - koiAlpha);
+            koiAlpha = koiAlpha + ka * (1.0 - koiAlpha);
+          }
         }
       }
       if (koiAlpha > 0.005) {
-        through = mix(through, koiAccum, koiAlpha);
+        through = through * (1.0 - koiAlpha) + koiPremul;
       }
     }
   } else {

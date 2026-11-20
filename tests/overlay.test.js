@@ -306,4 +306,130 @@ describe('createOverlay', () => {
     expect(hudCanvas.calls.filter((c) => c[0] === 'createLinearGradient').length).toBeGreaterThanOrEqual(6);
     expect(hudCanvas.calls.filter((c) => c[0] === 'lineTo').length).toBeGreaterThanOrEqual(5);
   });
+
+  it('caches blossom shadow and body sprites across frames when offscreen canvas and drawImage exist', () => {
+    const hudCanvas = makeMockCanvas();
+    const ctx = hudCanvas.getContext();
+    ctx.moveTo = () => {};
+    ctx.lineTo = () => {};
+    ctx.bezierCurveTo = () => {};
+    ctx.quadraticCurveTo = () => {};
+    ctx.closePath = () => {};
+    ctx.createLinearGradient = () => ({ addColorStop: () => {} });
+    ctx.createRadialGradient = () => ({ addColorStop: () => {} });
+    ctx.drawImage = (...args) => hudCanvas.calls.push(['drawImage', ...args]);
+
+    let offscreenCount = 0;
+    const createCanvas = (width, height) => {
+      offscreenCount += 1;
+      const off = makeMockCanvas();
+      off.width = width;
+      off.height = height;
+      const octx = off.getContext();
+      octx.moveTo = () => {};
+      octx.lineTo = () => {};
+      octx.bezierCurveTo = () => {};
+      octx.quadraticCurveTo = () => {};
+      octx.closePath = () => {};
+      octx.createLinearGradient = () => ({ addColorStop: () => {} });
+      octx.createRadialGradient = () => ({ addColorStop: () => {} });
+      octx.filter = 'none';
+      return off;
+    };
+
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null, createCanvas });
+    overlay.resize(1000, 800, 1);
+
+    const floater = {
+      x: 500,
+      y: 400,
+      radiusPx: 24,
+      angle: 0.4,
+      petals: 5,
+      seed: 1.2,
+      altitude: 0,
+      aspectY: 0.86,
+    };
+
+    overlay.draw([], 1000, { floaters: [floater] });
+    overlay.draw([], 1016, { floaters: [{ ...floater, x: 504, y: 402 }] });
+    overlay.draw([], 1032, { floaters: [{ ...floater, x: 508, y: 404 }] });
+
+    // Only 2 offscreen canvases created (1 blurred shadow + 1 blossom body), reused across all 3 frames
+    expect(offscreenCount).toBe(2);
+    expect(hudCanvas.calls.filter((c) => c[0] === 'drawImage').length).toBe(6);
+  });
+
+  it('skips redundant clearRect on consecutive empty frames and avoids redundant gesture badge writes', () => {
+    const hudCanvas = makeMockCanvas();
+    let badgeWrites = 0;
+    let badgeText = '';
+    const gestureBadge = {
+      classList: makeClassList(['hidden']),
+      get textContent() { return badgeText; },
+      set textContent(v) {
+        badgeWrites += 1;
+        badgeText = v;
+      },
+    };
+
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null, gestureBadge });
+    overlay.resize(1000, 800, 1);
+
+    overlay.draw([], 1000, {});
+    overlay.draw([], 1016, {});
+    overlay.draw([], 1032, {});
+    expect(hudCanvas.calls.filter((c) => c[0] === 'clearRect').length).toBe(1);
+
+    expect(overlay.setGestureLabel('Palm Sweep')).toBe(true);
+    expect(overlay.setGestureLabel('Palm Sweep')).toBe(false);
+    expect(overlay.setGestureLabel('Clap Shockwave')).toBe(true);
+    expect(badgeWrites).toBe(2);
+  });
+
+  it('draws realistic botanical leaves with serrated bezier margin, multi-tier venation, cuticle sheen, and surface droplets', () => {
+    const hudCanvas = makeMockCanvas();
+    const ctx = hudCanvas.getContext();
+    ctx.moveTo = (...args) => hudCanvas.calls.push(['moveTo', ...args]);
+    ctx.lineTo = (...args) => hudCanvas.calls.push(['lineTo', ...args]);
+    ctx.bezierCurveTo = (...args) => hudCanvas.calls.push(['bezierCurveTo', ...args]);
+    ctx.quadraticCurveTo = (...args) => hudCanvas.calls.push(['quadraticCurveTo', ...args]);
+    ctx.closePath = () => hudCanvas.calls.push(['closePath']);
+    ctx.clip = (...args) => hudCanvas.calls.push(['clip', ...args]);
+    ctx.createLinearGradient = () => {
+      hudCanvas.calls.push(['createLinearGradient']);
+      return { addColorStop: () => {} };
+    };
+    ctx.createRadialGradient = () => {
+      hudCanvas.calls.push(['createRadialGradient']);
+      return { addColorStop: () => {} };
+    };
+
+    const overlay = createOverlay({ hudCanvas, video: null, toggleButton: null, createCanvas: null });
+    overlay.resize(1000, 800, 1);
+    overlay.draw([], 1000, {
+      floaters: [{
+        x: 420,
+        y: 360,
+        radiusPx: 26,
+        angle: 0.45,
+        kind: 'leaf',
+        petals: 1,
+        seed: 1.35,
+        altitude: 0,
+        aspectY: 0.86,
+      }],
+    });
+
+    // Multi-segment serrated bezier outline (shadow + blade + fold + bevel + rim)
+    expect(hudCanvas.calls.filter((c) => c[0] === 'bezierCurveTo').length).toBeGreaterThanOrEqual(80);
+    // Alternating secondary arching veins + tertiary micro-veins + tapered petiole curves
+    expect(hudCanvas.calls.filter((c) => c[0] === 'quadraticCurveTo').length).toBeGreaterThanOrEqual(30);
+    // Contact AO + chlorophyll mottling/SSS + waxy cuticle sheen + refracted water droplets
+    expect(hudCanvas.calls.filter((c) => c[0] === 'createRadialGradient').length).toBeGreaterThanOrEqual(6);
+    // Petiole + base chlorophyll + 3D midrib fold gradients
+    expect(hudCanvas.calls.filter((c) => c[0] === 'createLinearGradient').length).toBeGreaterThanOrEqual(3);
+    // Water droplets + specular glints on resting leaf
+    expect(hudCanvas.calls.filter((c) => c[0] === 'arc').length).toBeGreaterThanOrEqual(8);
+  });
 });

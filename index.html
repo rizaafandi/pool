@@ -55,6 +55,34 @@
       align-items: center;
       gap: 8px;
       pointer-events: auto;
+      flex-shrink: 0;
+    }
+    .ui-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      display: block;
+    }
+    .chevron {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      display: block;
+      opacity: 0.72;
+      transition: transform 180ms var(--ease-ui), opacity 140ms var(--ease-ui);
+    }
+    #controls-toggle {
+      display: none;
+    }
+    #controls-toggle[aria-expanded="true"] .chevron {
+      transform: rotate(180deg);
+      opacity: 1;
+    }
+    #controls-drawer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
     }
     .seg-sep {
       width: 1px;
@@ -63,7 +91,7 @@
       margin: 0 2px;
       flex-shrink: 0;
     }
-    .theme-group {
+    .ctrl-group {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -74,6 +102,14 @@
       background: rgba(6, 26, 66, 0.48);
       border: 1px solid rgba(185, 238, 255, 0.28);
       backdrop-filter: blur(10px);
+    }
+    .group-header {
+      display: none;
+    }
+    .group-items {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
     .seg-btn {
       display: inline-flex;
@@ -92,6 +128,7 @@
       line-height: 1;
       letter-spacing: 0;
       cursor: pointer;
+      white-space: nowrap;
       text-shadow: 0 1px 3px rgba(2, 12, 34, 0.64);
       transition: background-color 140ms var(--ease-ui), border-color 140ms var(--ease-ui), color 140ms var(--ease-ui), transform 120ms var(--ease-ui);
     }
@@ -105,10 +142,8 @@
       border-color: rgba(220, 248, 255, 0.34);
       text-shadow: 0 1px 4px rgba(2, 12, 34, 0.72);
     }
-    .action-group {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
+    .btn-label-short {
+      display: none;
     }
     #gate {
       display: flex; align-items: center;
@@ -167,7 +202,7 @@
     .seg-btn:active, .pill:active, #gate button:active {
       transform: translateY(1px) scale(0.985);
     }
-    .seg-btn:focus-visible, .pill:focus-visible, #gate button:focus-visible {
+    .seg-btn:focus-visible, .pill:focus-visible, #gate button:focus-visible, .group-header:focus-visible {
       outline: 2px solid var(--ui-focus);
       outline-offset: 2px;
     }
@@ -200,7 +235,8 @@
       border-color: rgba(255, 255, 255, 0.34);
       background: rgba(255, 255, 255, 0.14);
     }
-    body.water-glass-ready .theme-group,
+    body.water-glass-ready .ctrl-group,
+    body.water-glass-ready #controls-drawer.open,
     body.water-glass-ready .pill,
     body.water-glass-ready .pill:hover,
     body.water-glass-ready .pill.active,
@@ -316,14 +352,24 @@
       transform: translateY(0);
       pointer-events: auto;
     }
+    @keyframes drawer-enter {
+      from {
+        opacity: 0;
+        transform: translateY(-4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
     @media (max-width: 1280px) {
       .top-bar {
         gap: 8px 12px;
       }
-      .toolbar, .action-group, .right-controls {
-        gap: 4px;
+      .toolbar, #controls-drawer, .right-controls {
+        gap: 8px;
       }
-      .theme-group {
+      .ctrl-group {
         height: 32px;
         padding: 4px;
         border-radius: 10px;
@@ -343,13 +389,161 @@
         display: none;
       }
     }
-    @media (max-width: 640px) {
+    @media (max-width: 960px) {
       .top-bar {
-        top: 12px; left: 12px; right: 12px;
+        top: 12px;
+        left: 12px;
+        right: 12px;
+        flex-wrap: nowrap;
         gap: 8px;
       }
-      .divider {
+      .toolbar {
+        flex-wrap: nowrap;
+      }
+      .right-controls {
+        gap: 8px;
+      }
+      #controls-toggle {
+        display: inline-flex;
+        height: 36px;
+        padding: 0 12px;
+        font-size: 13px;
+        border-radius: 10px;
+      }
+      .pill, #gate button {
+        height: 36px;
+        padding: 0 12px;
+        font-size: 13px;
+      }
+      #controls-drawer {
         display: none;
+        position: fixed;
+        top: 56px;
+        left: 12px;
+        width: min(336px, calc(100vw - 24px));
+        max-height: calc(100vh - 76px);
+        overflow-y: auto;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        padding: 8px;
+        box-sizing: border-box;
+        border-radius: 16px;
+        background: rgba(6, 26, 66, 0.72);
+        border: 1px solid rgba(185, 238, 255, 0.28);
+        backdrop-filter: blur(12px);
+        z-index: 5;
+        pointer-events: auto;
+      }
+      #controls-drawer.open {
+        display: flex;
+        animation: drawer-enter 160ms var(--ease-ui) both;
+      }
+      body.zen-mode #controls-drawer {
+        display: none !important;
+      }
+      .ctrl-group {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        height: auto;
+        padding: 4px 0;
+        border-radius: 0;
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+        background: transparent !important;
+        backdrop-filter: none !important;
+      }
+      .ctrl-group:first-child {
+        padding-top: 0;
+      }
+      .ctrl-group:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+      .group-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        height: 32px;
+        padding: 0 8px;
+        box-sizing: border-box;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--ui-text);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1;
+        cursor: pointer;
+        text-shadow: 0 1px 3px rgba(2, 12, 34, 0.68);
+        transition: background-color 140ms var(--ease-ui), color 140ms var(--ease-ui);
+      }
+      .group-header:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--ui-text-active);
+      }
+      .group-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .group-summary {
+        color: var(--ui-text-muted);
+        font-size: 12px;
+        font-weight: 400;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .group-header[aria-expanded="true"] .chevron {
+        transform: rotate(180deg);
+      }
+      .group-items {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        padding: 4px;
+      }
+      .ctrl-group.collapsed .group-items {
+        display: none;
+      }
+      .seg-sep {
+        display: none;
+      }
+      .seg-btn {
+        height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.10);
+      }
+      .seg-btn.active {
+        background: rgba(255, 255, 255, 0.20);
+        border-color: rgba(220, 248, 255, 0.42);
+      }
+      #cam-controls {
+        right: 12px;
+        bottom: 140px;
+      }
+      #cam {
+        right: 12px;
+        bottom: 12px;
+      }
+    }
+    @media (max-width: 480px) {
+      .btn-label-full {
+        display: none;
+      }
+      .btn-label-short {
+        display: inline;
       }
     }
     @media (hover: none) {
@@ -365,54 +559,119 @@
 
   <div class="top-bar">
     <div class="toolbar" role="toolbar" aria-label="Pool controls">
-      <div class="theme-group" role="group" aria-label="Pool lighting" data-glass-radius="12">
-        <button class="seg-btn active" type="button" data-theme="sunlit" aria-pressed="true" title="Sunlit (1)">
-          <span class="btn-label">Sunlit</span><kbd class="kbd" aria-hidden="true">1</kbd>
-        </button>
-        <button class="seg-btn" type="button" data-theme="sunset" aria-pressed="false" title="Sunset (2)">
-          <span class="btn-label">Sunset</span><kbd class="kbd" aria-hidden="true">2</kbd>
-        </button>
-        <button class="seg-btn" type="button" data-theme="night" aria-pressed="false" title="Night (3)">
-          <span class="btn-label">Night</span><kbd class="kbd" aria-hidden="true">3</kbd>
-        </button>
-        <button class="seg-btn" type="button" data-theme="biolum" aria-pressed="false" title="Biolum (4)">
-          <span class="btn-label">Biolum</span><kbd class="kbd" aria-hidden="true">4</kbd>
-        </button>
-        <span class="seg-sep" aria-hidden="true"></span>
-        <button id="cycle-toggle" class="seg-btn" type="button" aria-pressed="false" title="Cycle daylight (T) · Alt+Drag water to aim light">
-          <span class="btn-label">Cycle</span><kbd class="kbd" aria-hidden="true">T</kbd>
-        </button>
-      </div>
-      <span class="divider" aria-hidden="true"></span>
-      <div class="action-group" role="group" aria-label="Pool effects">
-        <button id="rain-toggle" class="pill" type="button" aria-pressed="false" data-glass-radius="10" title="Toggle rain (R)">
-          <span class="btn-label">Rain</span><kbd class="kbd" aria-hidden="true">R</kbd>
-        </button>
-        <button id="petals-toggle" class="pill" type="button" data-glass-radius="10" title="Drop a petal (P)">
-          <span class="btn-label">Petal</span><kbd class="kbd" aria-hidden="true">P</kbd>
-        </button>
-        <button id="lantern-toggle" class="pill" type="button" data-glass-radius="10" title="Place a water lantern (L)">
-          <span class="btn-label">Lantern</span><kbd class="kbd" aria-hidden="true">L</kbd>
-        </button>
-        <button id="koi-toggle" class="pill active" type="button" aria-pressed="true" data-glass-radius="10" title="Toggle koi (K)">
-          <span class="btn-label">Koi</span><kbd class="kbd" aria-hidden="true">K</kbd>
-        </button>
-        <button id="bed-toggle" class="pill" type="button" data-glass-radius="10" title="Cycle pool bed: Tiles / Pebbles / Sand (B)">
-          <span class="btn-label">Tiles</span><kbd class="kbd" aria-hidden="true">B</kbd>
-        </button>
-        <button id="water-toggle" class="pill" type="button" data-glass-radius="10" title="Cycle water condition: Calm / Breeze / Storm (W)">
-          <span class="btn-label">Breeze</span><kbd class="kbd" aria-hidden="true">W</kbd>
-        </button>
-        <button id="sound-toggle" class="pill active" type="button" aria-pressed="true" data-glass-radius="10" title="Toggle sound (M)">
-          <span class="btn-label">Sound</span><kbd class="kbd" aria-hidden="true">M</kbd>
-        </button>
+      <button
+        id="controls-toggle"
+        class="pill"
+        type="button"
+        aria-expanded="false"
+        aria-controls="controls-drawer"
+        data-glass-radius="10"
+      >
+        <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="4" y1="7" x2="20" y2="7" />
+          <line x1="4" y1="12" x2="20" y2="12" />
+          <line x1="4" y1="17" x2="20" y2="17" />
+          <circle cx="9" cy="7" r="2" fill="currentColor" stroke="none" />
+          <circle cx="15" cy="12" r="2" fill="currentColor" stroke="none" />
+          <circle cx="10" cy="17" r="2" fill="currentColor" stroke="none" />
+        </svg>
+        <span class="btn-label">Controls</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      <div id="controls-drawer" data-glass-radius="16">
+        <section id="group-lighting" class="ctrl-group theme-group" aria-label="Lighting" data-glass-radius="12">
+          <button class="group-header" type="button" data-group-toggle="lighting" aria-expanded="true">
+            <span>Lighting</span>
+            <span class="group-meta">
+              <span class="group-summary" data-group-summary="lighting">Sunlit</span>
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+          </button>
+          <div class="group-items" role="group" aria-label="Pool lighting">
+            <button class="seg-btn active" type="button" data-theme="sunlit" aria-pressed="true" title="Sunlit (1)">
+              <span class="btn-label">Sunlit</span><kbd class="kbd" aria-hidden="true">1</kbd>
+            </button>
+            <button class="seg-btn" type="button" data-theme="sunset" aria-pressed="false" title="Sunset (2)">
+              <span class="btn-label">Sunset</span><kbd class="kbd" aria-hidden="true">2</kbd>
+            </button>
+            <button class="seg-btn" type="button" data-theme="night" aria-pressed="false" title="Night (3)">
+              <span class="btn-label">Night</span><kbd class="kbd" aria-hidden="true">3</kbd>
+            </button>
+            <button class="seg-btn" type="button" data-theme="biolum" aria-pressed="false" title="Biolum (4)">
+              <span class="btn-label">Biolum</span><kbd class="kbd" aria-hidden="true">4</kbd>
+            </button>
+            <span class="seg-sep" aria-hidden="true"></span>
+            <button id="cycle-toggle" class="seg-btn" type="button" aria-pressed="false" title="Cycle daylight (T) · Alt+Drag water to aim light">
+              <span class="btn-label">Cycle</span><kbd class="kbd" aria-hidden="true">T</kbd>
+            </button>
+          </div>
+        </section>
+
+        <section id="group-pond" class="ctrl-group" aria-label="Pond" data-glass-radius="12">
+          <button class="group-header" type="button" data-group-toggle="pond" aria-expanded="true">
+            <span>Pond</span>
+            <span class="group-meta">
+              <span class="group-summary" data-group-summary="pond">Koi</span>
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+          </button>
+          <div class="group-items" role="group" aria-label="Pond life and floaters">
+            <button id="petals-toggle" class="seg-btn" type="button" title="Drop a petal (P)">
+              <span class="btn-label">Petal</span><kbd class="kbd" aria-hidden="true">P</kbd>
+            </button>
+            <button id="lantern-toggle" class="seg-btn" type="button" title="Place a water lantern (L)">
+              <span class="btn-label">Lantern</span><kbd class="kbd" aria-hidden="true">L</kbd>
+            </button>
+            <button id="koi-toggle" class="seg-btn active" type="button" aria-pressed="true" title="Toggle koi (K)">
+              <span class="btn-label">Koi</span><kbd class="kbd" aria-hidden="true">K</kbd>
+            </button>
+          </div>
+        </section>
+
+        <section id="group-atmosphere" class="ctrl-group" aria-label="Atmosphere" data-glass-radius="12">
+          <button class="group-header" type="button" data-group-toggle="atmosphere" aria-expanded="true">
+            <span>Atmosphere</span>
+            <span class="group-meta">
+              <span class="group-summary" data-group-summary="atmosphere">Tiles · Breeze</span>
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+          </button>
+          <div class="group-items" role="group" aria-label="Water and environment">
+            <button id="rain-toggle" class="seg-btn" type="button" aria-pressed="false" title="Toggle rain (R)">
+              <span class="btn-label">Rain</span><kbd class="kbd" aria-hidden="true">R</kbd>
+            </button>
+            <button id="bed-toggle" class="seg-btn" type="button" title="Cycle pool bed: Tiles / Pebbles / Sand (B)">
+              <span class="btn-label">Tiles</span><kbd class="kbd" aria-hidden="true">B</kbd>
+            </button>
+            <button id="water-toggle" class="seg-btn" type="button" title="Cycle water condition: Calm / Breeze / Storm (W)">
+              <span class="btn-label">Breeze</span><kbd class="kbd" aria-hidden="true">W</kbd>
+            </button>
+            <button id="sound-toggle" class="seg-btn active" type="button" aria-pressed="true" title="Toggle sound (M)">
+              <span class="btn-label">Sound</span><kbd class="kbd" aria-hidden="true">M</kbd>
+            </button>
+          </div>
+        </section>
       </div>
     </div>
     <div class="right-controls">
       <button id="zen-toggle" class="pill" type="button" aria-pressed="false" data-glass-radius="10" title="Zen mode (H)">
         <span class="btn-label">Zen</span><kbd class="kbd" aria-hidden="true">H</kbd>
       </button>
-      <div id="gate"><button id="start" type="button">Use hand gesture</button></div>
+      <div id="gate">
+        <button id="start" type="button">
+          <span class="btn-label-full">Use hand gesture</span>
+          <span class="btn-label-short">Hands</span>
+        </button>
+      </div>
     </div>
   </div>
   <button id="zen-exit" type="button" title="Exit Zen mode (H or Esc)">
